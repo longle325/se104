@@ -1,132 +1,210 @@
 import { useState } from "react";
 import {
-  Flex,
-  Heading,
-  Input,
-  Button,
-  InputGroup,
-  Stack,
-  InputLeftElement,
-  chakra,
   Box,
-  Link,
-  Avatar,
+  Button,
+  Flex,
   FormControl,
-  FormHelperText,
-  InputRightElement
+  Image,
+  Input,
+  InputGroup,
+  InputLeftElement,
+  Link,
+  Stack,
+  Text,
+  useToast
 } from "@chakra-ui/react";
-import { FaUserAlt, FaLock } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
-
-const CFaUserAlt = chakra(FaUserAlt);
-const CFaLock = chakra(FaLock);
+import backgroundImage from "./assets/auth/background.png";
+import logoImage from "./assets/auth/logo.png";
+import usernameIcon from "./assets/auth/username.png";
+import passwordIcon from "./assets/auth/password.png";
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState("");
-
-  const handleShowClick = () => setShowPassword(!showPassword);
 
   const handleLogin = async (e) => {
     e.preventDefault();
 
-    // For FastAPI OAuth2PasswordRequestForm, we need to send data as form data.
+    // Create form data for FastAPI OAuth2PasswordRequestForm
     const formData = new URLSearchParams();
     formData.append("username", username);
     formData.append("password", password);
 
-    const response = await fetch("http://localhost:8000/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: formData.toString()
-    });
+    try {
+      // Send login request to backend
+      const response = await fetch("http://localhost:8000/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: formData.toString()
+      });
 
-    if (response.ok) {
-      const data = await response.json();
-      // If login is successful, navigate to the homepage.
-      navigate("/home");
-    } else {
-      const err = await response.json();
-      setError(err.detail || "Login failed");
+      if (response.ok) {
+        // Display success message and navigate to background page
+        toast({
+          title: "Login successful",
+          status: "success",
+          duration: 2000,
+          isClosable: true,
+        });
+        navigate("/background");
+      } else {
+        // Handle login failure
+        const error = await response.json();
+        toast({
+          title: "Login failed",
+          description: error.detail || "Invalid credentials",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+        });
+      }
+    } catch (error) {
+      // Handle network or other errors
+      toast({
+        title: "Error",
+        description: "An error occurred while logging in",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
     }
   };
 
   return (
     <Flex
-      flexDirection="column"
-      width="100wh"
-      height="100vh"
-      backgroundColor="gray.200"
-      justifyContent="center"
-      alignItems="center"
+      minH="100vh"
+      align="center"
+      justify="center"
+      bgImage={backgroundImage}
+      bgSize="cover"
+      bgPosition="center"
     >
-      <Stack flexDir="column" mb="2" justifyContent="center" alignItems="center">
-        <Avatar bg="teal.500" />
-        <Heading color="teal.400">Login</Heading>
-        <Box minW={{ base: "90%", md: "468px" }}>
-          <form onSubmit={handleLogin}>
-            <Stack spacing={4} p="1rem" backgroundColor="whiteAlpha.900" boxShadow="md">
+      <Box
+        p={8}
+        rounded="sm"
+        w={{ base: "90%", md: "450px" }}
+      >
+        <Stack spacing={6} align="center">
+          <Image 
+            src={logoImage} 
+            alt="UIT Logo" 
+            w="150px" 
+            filter="drop-shadow(0px 5px 5px rgba(0, 0, 0, 0.25))"
+          />
+          <Text color="white" fontSize="3xl" fontWeight="bold">
+            UIT W2F - WHERE TO FIND
+          </Text>
+          
+          <form onSubmit={handleLogin} style={{ width: "100%" }}>
+            <Stack spacing={4}>
               <FormControl>
                 <InputGroup>
-                  <InputLeftElement pointerEvents="none">
-                    <CFaUserAlt color="gray.300" />
+                  <InputLeftElement>
+                    <Image src={usernameIcon} alt="Username" w="25px" />
                   </InputLeftElement>
                   <Input
                     type="text"
-                    placeholder="Username"
+                    placeholder="USERNAME"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    borderRadius="lg"
+                    bg="rgba(255, 255, 255, 0.0)"
+                    _hover={{
+                      bg: "rgba(255, 255, 255, 0.2)"
+                    }}
+                    _focus={{
+                      bg: "rgba(255, 255, 255, 0.4)",
+                      borderColor: "blue.500"
+                    }}
                   />
                 </InputGroup>
               </FormControl>
+
               <FormControl>
                 <InputGroup>
-                  <InputLeftElement pointerEvents="none" color="gray.300">
-                    <CFaLock color="gray.300" />
+                  <InputLeftElement>
+                    <Image src={passwordIcon} alt="Password" w="25px" />
                   </InputLeftElement>
                   <Input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Password"
+                    type="password"
+                    placeholder="PASSWORD"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    borderRadius="lg"
+                    bg="rgba(255, 255, 255, 0.0)"
+                    _hover={{
+                      bg: "rgba(255, 255, 255, 0.2)"
+                    }}
+                    _focus={{
+                      bg: "rgba(255, 255, 255, 0.4)",
+                      borderColor: "blue.500"
+                    }}
                   />
-                  <InputRightElement width="4.5rem">
-                    <Button h="1.75rem" size="sm" onClick={handleShowClick}>
-                      {showPassword ? "Hide" : "Show"}
-                    </Button>
-                  </InputRightElement>
                 </InputGroup>
-                <FormHelperText textAlign="right">
-                  <Link>forgot password?</Link>
-                </FormHelperText>
               </FormControl>
-              {error && <Box color="red.500">{error}</Box>}
+
               <Button
-                borderRadius={0}
                 type="submit"
-                variant="solid"
-                colorScheme="teal"
-                width="full"
+                colorScheme="blue"
+                size="lg"
+                fontSize="md"
+                borderRadius="full"
+                rounded="xl"
+                w="100%"
+                mt={4}
+                boxShadow="0 4px 6px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06)"
+                _hover={{
+                  bg: "whiteAlpha.900",
+                  transform: "translateY(-2px)",
+                  boxShadow: "0 6px 8px rgba(0, 0, 0, 0.15), 0 3px 6px rgba(0, 0, 0, 0.1)"
+                }}
+                _active={{
+                  transform: "translateY(0)",
+                  boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)"
+                }}
+                bg="white"
+                color="blue.500"
+                fontWeight={"bold"}
+                transition="all 0.2s"
               >
-                Login
+                LOGIN
               </Button>
             </Stack>
           </form>
-        </Box>
-      </Stack>
-      <Box>
-        New to us?{" "}
-        <Link color="teal.500" onClick={() => navigate("/register")}>
-          Sign Up
-        </Link>
+
+          <Stack direction="row" justify="space-between" w="100%" pt={2}>
+            <Link
+              color="white"
+              onClick={() => navigate("/register")}
+              fontSize="sm"
+              _hover={{
+                textDecoration: "none",
+                color: "whiteAlpha.800"
+              }}
+            >
+              Sign up
+            </Link>
+            <Link
+              color="white"
+              onClick={() => navigate("/forgot-password")}
+              fontSize="sm"
+              _hover={{
+                textDecoration: "none",
+                color: "whiteAlpha.800"
+              }}
+            >
+              Forgot password?
+            </Link>
+          </Stack>
+        </Stack>
       </Box>
     </Flex>
-  );
+  );  
 };
 
 export default LoginPage;
