@@ -11,7 +11,11 @@ import {
   Link,
   Stack,
   Text,
-  useToast
+  useToast,
+  Alert,
+  AlertIcon,
+  AlertTitle,
+  AlertDescription
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
 import backgroundImage from "./assets/auth/background.png";
@@ -27,10 +31,11 @@ const RegisterPage = () => {
   const [formData, setFormData] = useState({
     username: "",
     email: "",
-    phone: "",
+    phonenumber: "",
     password: "",
     confirmPassword: ""
   });
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -42,8 +47,21 @@ const RegisterPage = () => {
 
   const handleRegister = async (e) => {
     e.preventDefault();
-
-    if (formData.password !== formData.confirmPassword) {
+  
+    const { username, email, phonenumber, password, confirmPassword } = formData;
+  
+    if (!username || !email || !phonenumber || !password || !confirmPassword) {
+      toast({
+        title: "Incomplete Information",
+        description: "Please fill in all fields.",
+        status: "warning",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+  
+    if (password !== confirmPassword) {
       toast({
         title: "Error",
         description: "Passwords do not match",
@@ -53,34 +71,29 @@ const RegisterPage = () => {
       });
       return;
     }
-
+  
     try {
       const response = await fetch("http://localhost:8000/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          username: formData.username,
-          email: formData.email,
-          phone: formData.phone,
-          password: formData.password
-        })
+        body: JSON.stringify({ username, email, phonenumber, password })
       });
-
+  
       if (response.ok) {
+        setRegistrationSuccess(true);
         toast({
-          title: "Success",
-          description: "Account created successfully",
+          title: "Account Created!",
+          description: "Please check your email to verify your account.",
           status: "success",
-          duration: 2000,
+          duration: 5000,
           isClosable: true,
         });
-        navigate("/login");
       } else {
         const error = await response.json();
         toast({
-          title: "Registration failed",
+          title: "Registration Failed",
           description: error.detail || "An error occurred during registration",
           status: "error",
           duration: 3000,
@@ -89,7 +102,7 @@ const RegisterPage = () => {
       }
     } catch (error) {
       toast({
-        title: "Error",
+        title: "Network Error",
         description: "An error occurred while registering",
         status: "error",
         duration: 3000,
@@ -97,6 +110,63 @@ const RegisterPage = () => {
       });
     }
   };
+
+  if (registrationSuccess) {
+    return (
+      <Flex
+        minH="100vh"
+        align="center"
+        justify="center"
+        bgImage={backgroundImage}
+        bgSize="cover"
+        bgPosition="center"
+      >
+        <Box
+          p={8}
+          rounded="sm"
+          w={{ base: "90%", md: "450px" }}
+          bg="rgba(0, 0, 0, 0.7)"
+          color="white"
+        >
+          <Stack spacing={6} align="center">
+            <Text fontSize="2xl" fontWeight="bold">
+              Registration Successful!
+            </Text>
+            <Alert
+              status="success"
+              variant="subtle"
+              flexDirection="column"
+              alignItems="center"
+              justifyContent="center"
+              textAlign="center"
+              height="200px"
+              bg="rgba(56, 161, 105, 0.3)"
+              color="white"
+              borderRadius="md"
+            >
+              <AlertIcon boxSize="40px" mr={0} color="green.200" />
+              <AlertTitle mt={4} mb={1} fontSize="lg">
+                Verification Email Sent!
+              </AlertTitle>
+              <AlertDescription maxWidth="sm">
+                We've sent a verification link to {formData.email}. 
+                Please check your email and click the link to activate your account.
+              </AlertDescription>
+            </Alert>
+            <Button
+              onClick={() => navigate("/login")}
+              size="lg"
+              colorScheme="blue"
+              mt={4}
+              w="full"
+            >
+              Go to Login
+            </Button>
+          </Stack>
+        </Box>
+      </Flex>
+    );
+  }
 
   return (
     <Flex
@@ -170,13 +240,13 @@ const RegisterPage = () => {
               <FormControl>
                 <InputGroup>
                   <InputLeftElement>
-                    <Image src={phoneIcon} alt="Phone" w="25px" />
+                    <Image src={phoneIcon} alt="phonenumber" w="25px" />
                   </InputLeftElement>
                   <Input
-                    name="phone"
+                    name="phonenumber"
                     type="tel"
-                    placeholder="PHONE NUMBER"
-                    value={formData.phone}
+                    placeholder="PHONENUMBER"
+                    value={formData.phonenumber}
                     onChange={handleChange}
                     borderRadius="lg"
                     bg="rgba(255, 255, 255, 0.0)"
@@ -242,45 +312,31 @@ const RegisterPage = () => {
               <Button
                 type="submit"
                 colorScheme="blue"
-                size="lg"
-                fontSize="md"
-                borderRadius="full"
-                rounded="xl"
-                w="100%"
-                boxShadow="0 4px 6px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06)"
-                _hover={{
-                  bg: "whiteAlpha.900",
-                  transform: "translateY(-2px)",
-                  boxShadow: "0 6px 8px rgba(0, 0, 0, 0.15), 0 3px 6px rgba(0, 0, 0, 0.1)"
-                }}
-                _active={{
-                  transform: "translateY(0)",
-                  boxShadow: "0 2px 4px rgba(0, 0, 0, 0.15)"
-                }}
-                bg="white"
-                color="blue.500"
-                fontWeight="bold"
-                transition="all 0.2s"
+                width="full"
+                mt={4}
+                mb={4}
+                fontSize="lg"
+                padding="24px"
+                borderRadius="xl"
+                _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
+                bg="linear-gradient(90deg, #0066FF 0%, #6942EF 100%)"
               >
-                SIGN UP
+                REGISTER
               </Button>
             </Stack>
           </form>
 
-          <Stack direction="row" justify="center" w="100%" pt={2}>
-            <Text fontSize="sm" color="white">Already have an account?</Text>
-            <Link
-              color="white"
+          <Text color="white" mt={2} textAlign="center">
+            Already have an account?{" "}
+            <Link 
+              color="blue.300" 
               onClick={() => navigate("/login")}
-              fontSize="sm"
-              _hover={{
-                textDecoration: "none",
-                color: "whiteAlpha.800"
-              }}
+              cursor="pointer"
+              _hover={{ color: "blue.200", textDecoration: "underline" }}
             >
               Login
             </Link>
-          </Stack>
+          </Text>
         </Stack>
       </Box>
     </Flex>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Box,
   Button,
@@ -12,15 +12,41 @@ import {
   useToast,
   Text
 } from "@chakra-ui/react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import backgroundImage from "./assets/auth/background.png";
 import passwordIcon from "./assets/auth/password.png";
 
 const ResetPasswordPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    // Extract email and code from URL query parameters
+    const queryParams = new URLSearchParams(location.search);
+    const emailParam = queryParams.get("email");
+    const codeParam = queryParams.get("code");
+    
+    if (emailParam) setEmail(emailParam);
+    if (codeParam) setCode(codeParam);
+    
+    if (!emailParam || !codeParam) {
+      toast({
+        title: "Error",
+        description: "Missing verification information. Please try the password reset process again.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+      // Redirect to forgot-password page after a short delay
+      setTimeout(() => navigate("/forgot-password"), 2000);
+    }
+  }, [location, navigate, toast]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -35,14 +61,31 @@ const ResetPasswordPage = () => {
       });
       return;
     }
+    
+    if (newPassword.length < 6) {
+      toast({
+        title: "Error",
+        description: "Password must be at least 6 characters long",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
 
+    setIsSubmitting(true);
+    
     try {
       const response = await fetch("http://localhost:8000/reset-password", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ new_password: newPassword }),
+        body: JSON.stringify({ 
+          email: email,
+          code: code,
+          new_password: newPassword
+        }),
       });
 
       if (response.ok) {
@@ -53,7 +96,8 @@ const ResetPasswordPage = () => {
           duration: 2000,
           isClosable: true,
         });
-        navigate("/background");
+        // Redirect to login page after a short delay
+        setTimeout(() => navigate("/login"), 2000);
       } else {
         const error = await response.json();
         toast({
@@ -72,6 +116,8 @@ const ResetPasswordPage = () => {
         duration: 3000,
         isClosable: true,
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -196,6 +242,8 @@ const ResetPasswordPage = () => {
                 bg="white"
                 color="blue.500"
                 transition="all 0.2s"
+                isLoading={isSubmitting}
+                disabled={!email || !code}
               >
                 UPDATE PASSWORD
               </Button>

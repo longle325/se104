@@ -11,7 +11,10 @@ import {
   Link,
   Stack,
   Text,
-  useToast
+  useToast,
+  Alert,
+  AlertIcon,
+  AlertDescription
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
 import backgroundImage from "./assets/auth/background.png";
@@ -24,9 +27,25 @@ const LoginPage = () => {
   const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [activationError, setActivationError] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    setActivationError(false);
+
+    if (!username || !password) {
+      toast({
+        title: "Error",
+        description: "Please enter both username and password",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsLoading(true);
 
     // Create form data for FastAPI OAuth2PasswordRequestForm
     const formData = new URLSearchParams();
@@ -55,13 +74,19 @@ const LoginPage = () => {
       } else {
         // Handle login failure
         const error = await response.json();
-        toast({
-          title: "Login failed",
-          description: error.detail || "Invalid credentials",
-          status: "error",
-          duration: 3000,
-          isClosable: true,
-        });
+        
+        // Check if this is an activation error
+        if (error.detail && error.detail.includes("Account not activated")) {
+          setActivationError(true);
+        } else {
+          toast({
+            title: "Login failed",
+            description: error.detail || "Invalid credentials",
+            status: "error",
+            duration: 3000,
+            isClosable: true,
+          });
+        }
       }
     } catch (error) {
       // Handle network or other errors
@@ -72,6 +97,8 @@ const LoginPage = () => {
         duration: 3000,
         isClosable: true,
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -99,6 +126,20 @@ const LoginPage = () => {
           <Text color="white" fontSize="3xl" fontWeight="bold">
             UIT W2F - WHERE TO FIND
           </Text>
+          
+          {activationError && (
+            <Alert 
+              status="warning" 
+              variant="solid" 
+              borderRadius="md" 
+              bg="rgba(236, 201, 75, 0.8)"
+            >
+              <AlertIcon />
+              <AlertDescription>
+                Your account has not been activated. Please check your email for the verification link.
+              </AlertDescription>
+            </Alert>
+          )}
           
           <form onSubmit={handleLogin} style={{ width: "100%" }}>
             <Stack spacing={4}>
@@ -171,6 +212,7 @@ const LoginPage = () => {
                 color="blue.500"
                 fontWeight={"bold"}
                 transition="all 0.2s"
+                isLoading={isLoading}
               >
                 LOGIN
               </Button>
