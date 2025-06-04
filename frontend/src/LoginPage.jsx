@@ -17,23 +17,25 @@ import {
   AlertDescription
 } from "@chakra-ui/react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "./components/AuthContext";
 import backgroundImage from "./assets/auth/background.png";
 import logoImage from "./assets/auth/logo.png";
 import usernameIcon from "./assets/auth/username.png";
 import passwordIcon from "./assets/auth/password.png";
 
 const LoginPage = () => {
-  const navigate = useNavigate();
-  const toast = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [activationError, setActivationError] = useState(false);
+  const toast = useToast();
+  const navigate = useNavigate();
+  const { login } = useAuth();
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setActivationError(false);
-
+    
     if (!username || !password) {
       toast({
         title: "Error",
@@ -47,30 +49,34 @@ const LoginPage = () => {
 
     setIsLoading(true);
 
-    // Create form data for FastAPI OAuth2PasswordRequestForm
-    const formData = new URLSearchParams();
-    formData.append("username", username);
-    formData.append("password", password);
-
     try {
-      // Send login request to backend
+      // Send login request to backend using JSON format
       const response = await fetch("http://localhost:8000/login", {
         method: "POST",
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded"
+          "Content-Type": "application/json"
         },
-        body: formData.toString()
+        body: JSON.stringify({
+          username: username,
+          password: password
+        })
       });
 
       if (response.ok) {
-        // Display success message and navigate to background page
+        const data = await response.json();
+        
+        // Store user data from response
+        login(data.user, data.access_token);
+        
+        // Display success message and navigate to homepage
         toast({
           title: "Login successful",
+          description: `Welcome back, ${data.user.full_name || data.user.username}!`,
           status: "success",
           duration: 2000,
           isClosable: true,
         });
-        navigate("/background");
+        navigate("/homepage");
       } else {
         // Handle login failure
         const error = await response.json();

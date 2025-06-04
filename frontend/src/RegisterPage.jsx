@@ -29,13 +29,14 @@ const RegisterPage = () => {
   const navigate = useNavigate();
   const toast = useToast();
   const [formData, setFormData] = useState({
-    username: "",
+    full_name: "",
     email: "",
     phonenumber: "",
     password: "",
     confirmPassword: ""
   });
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [generatedUsername, setGeneratedUsername] = useState("");
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -48,9 +49,9 @@ const RegisterPage = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
   
-    const { username, email, phonenumber, password, confirmPassword } = formData;
+    const { full_name, email, phonenumber, password, confirmPassword } = formData;
   
-    if (!username || !email || !phonenumber || !password || !confirmPassword) {
+    if (!full_name || !email || !phonenumber || !password || !confirmPassword) {
       toast({
         title: "Incomplete Information",
         description: "Please fill in all fields.",
@@ -78,14 +79,21 @@ const RegisterPage = () => {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ username, email, phonenumber, password })
+        body: JSON.stringify({ 
+          email, 
+          phonenumber, 
+          password, 
+          full_name 
+        })
       });
   
       if (response.ok) {
+        const data = await response.json();
+        setGeneratedUsername(data.username);
         setRegistrationSuccess(true);
         toast({
           title: "Account Created!",
-          description: "Please check your email to verify your account.",
+          description: `Your username is ${data.username}. Please check your email to verify your account.`,
           status: "success",
           duration: 5000,
           isClosable: true,
@@ -139,7 +147,7 @@ const RegisterPage = () => {
               alignItems="center"
               justifyContent="center"
               textAlign="center"
-              height="200px"
+              height="250px"
               bg="rgba(56, 161, 105, 0.3)"
               color="white"
               borderRadius="md"
@@ -149,8 +157,16 @@ const RegisterPage = () => {
                 Verification Email Sent!
               </AlertTitle>
               <AlertDescription maxWidth="sm">
-                We've sent a verification link to {formData.email}. 
-                Please check your email and click the link to activate your account.
+                <Text mb={2}>
+                  Your username is: <Text as="span" fontWeight="bold" color="green.200">{generatedUsername}</Text>
+                </Text>
+                <Text mb={2} fontSize="sm" color="yellow.200">
+                  <Text as="span" fontWeight="bold">Ghi chú:</Text> Sử dụng username này để đăng nhập, không phải email.
+                </Text>
+                <Text>
+                  We've sent a verification link to {formData.email}. 
+                  Please check your email and click the link to activate your account.
+                </Text>
               </AlertDescription>
             </Alert>
             <Button
@@ -192,13 +208,13 @@ const RegisterPage = () => {
               <FormControl>
                 <InputGroup>
                   <InputLeftElement>
-                    <Image src={usernameIcon} alt="Username" w="25px" />
+                    <Image src={usernameIcon} alt="Full Name" w="25px" />
                   </InputLeftElement>
                   <Input
-                    name="username"
+                    name="full_name"
                     type="text"
-                    placeholder="USERNAME"
-                    value={formData.username}
+                    placeholder="FULL NAME"
+                    value={formData.full_name}
                     onChange={handleChange}
                     borderRadius="lg"
                     bg="rgba(255, 255, 255, 0.0)"
@@ -221,7 +237,7 @@ const RegisterPage = () => {
                   <Input
                     name="email"
                     type="email"
-                    placeholder="EMAIL"
+                    placeholder="EMAIL (@gm.uit.edu.vn)"
                     value={formData.email}
                     onChange={handleChange}
                     borderRadius="lg"
@@ -245,7 +261,7 @@ const RegisterPage = () => {
                   <Input
                     name="phonenumber"
                     type="tel"
-                    placeholder="PHONENUMBER"
+                    placeholder="PHONE NUMBER"
                     value={formData.phonenumber}
                     onChange={handleChange}
                     borderRadius="lg"
@@ -336,6 +352,10 @@ const RegisterPage = () => {
             >
               Login
             </Link>
+          </Text>
+          
+          <Text color="gray.300" fontSize="sm" textAlign="center" mt={2}>
+            Username sẽ được tự động tạo từ email và dùng để đăng nhập
           </Text>
         </Stack>
       </Box>
