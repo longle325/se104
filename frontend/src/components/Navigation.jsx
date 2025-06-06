@@ -1,6 +1,5 @@
 import { 
   Box, 
-  VStack, 
   HStack, 
   Image, 
   Text, 
@@ -8,32 +7,34 @@ import {
   useColorModeValue,
   Flex,
   IconButton,
-  Drawer,
-  DrawerOverlay,
-  DrawerContent,
-  DrawerHeader,
-  DrawerBody,
-  useDisclosure
+  Menu,
+  MenuButton,
+  MenuList,
+  MenuItem,
+  MenuDivider,
+  Avatar,
+  Container
 } from "@chakra-ui/react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthContext";
-import { FiHome, FiMessageSquare, FiEdit, FiUser, FiMenu, FiLogOut } from "react-icons/fi";
+import { FiHome, FiMessageSquare, FiEdit, FiUser, FiLogOut, FiSettings, FiLock } from "react-icons/fi";
+import { useState, useEffect } from "react";
 import logoImage from "../assets/auth/logo.png";
+import NotificationCenter from "./NotificationCenter";
+import MessageCenter from "./MessageCenter";
 
 const Navigation = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, user } = useAuth();
-  const { isOpen, onOpen, onClose } = useDisclosure();
   
-  const bg = useColorModeValue("white", "gray.900");
-  const borderColor = useColorModeValue("gray.200", "gray.700");
+  const bg = useColorModeValue("white", "gray.800");
+  const borderColor = useColorModeValue("gray.200", "gray.600");
+  const hoverBg = useColorModeValue("gray.100", "gray.700");
 
   const menuItems = [
     { name: "Trang chủ", icon: FiHome, path: "/homepage" },
-    { name: "Chat", icon: FiMessageSquare, path: "/chat" },
     { name: "Đăng tin", icon: FiEdit, path: "/dangtin" },
-    { name: "Cá nhân", icon: FiUser, path: `/profile/${user?.username || 'me'}` },
   ];
 
   const handleLogout = () => {
@@ -41,117 +42,175 @@ const Navigation = ({ children }) => {
     navigate("/login");
   };
 
-  const SidebarContent = ({ onClose, ...rest }) => (
-    <Box
-      bg={bg}
-      borderRight="1px"
-      borderRightColor={borderColor}
-      w={{ base: "full", md: 60 }}
-      pos="fixed"
-      h="full"
-      {...rest}
-    >
-      <Flex h="20" alignItems="center" mx="8" justifyContent="center" flexDirection="column">
-        <Image 
-          src={logoImage} 
-          alt="UIT Logo" 
-          w="60px" 
-          h="60px"
-          mb={1}
-        />
-        <Text fontSize="sm" fontWeight="bold" color="blue.500" textAlign="center">
-          UIT-W2F
-        </Text>
-      </Flex>
-      <VStack spacing={1} align="stretch">
-        {menuItems.map((item) => (
-          <Button
-            key={item.name}
-            variant={location.pathname === item.path ? "solid" : "ghost"}
-            colorScheme={location.pathname === item.path ? "blue" : "gray"}
-            justifyContent="flex-start"
-            leftIcon={<item.icon />}
-            mx={4}
-            onClick={() => {
-              navigate(item.path);
-              onClose();
-            }}
-          >
-            {item.name}
-          </Button>
-        ))}
-        <Box mt={8}>
-          <Button
-            variant="ghost"
-            colorScheme="red"
-            justifyContent="flex-start"
-            leftIcon={<FiLogOut />}
-            mx={4}
-            onClick={handleLogout}
-          >
-            Đăng xuất
-          </Button>
-        </Box>
-      </VStack>
-    </Box>
-  );
-
   return (
-    <Box minH="100vh" bg={useColorModeValue("gray.100", "gray.900")}>
-      <SidebarContent onClose={() => onClose} display={{ base: "none", md: "block" }} />
-      <Drawer
-        autoFocus={false}
-        isOpen={isOpen}
-        placement="left"
-        onClose={onClose}
-        returnFocusOnClose={false}
-        onOverlayClick={onClose}
-        size="full"
-      >
-        <DrawerOverlay />
-        <DrawerContent>
-          <SidebarContent onClose={onClose} />
-        </DrawerContent>
-      </Drawer>
-      
-      {/* Mobile nav */}
-      <Flex
-        ml={{ base: 0, md: 60 }}
-        px={{ base: 4, md: 4 }}
-        height="20"
-        alignItems="center"
+    <Box minH="100vh" bg={useColorModeValue("gray.50", "gray.900")}>
+      {/* Top Navigation Bar */}
+      <Box
+        position="fixed"
+        top={0}
+        left={0}
+        right={0}
+        zIndex={1000}
         bg={bg}
-        borderBottomWidth="1px"
+        borderBottom="1px"
         borderBottomColor={borderColor}
-        justifyContent={{ base: "space-between", md: "flex-end" }}
+        shadow="sm"
       >
-        <IconButton
-          display={{ base: "flex", md: "none" }}
-          onClick={onOpen}
-          variant="outline"
-          aria-label="open menu"
-          icon={<FiMenu />}
-        />
-        
-        <HStack display={{ base: "flex", md: "none" }}>
-          <Image 
-            src={logoImage} 
-            alt="UIT Logo" 
-            w="40px" 
-            h="40px"
-          />
-          <Text fontSize="lg" fontWeight="bold" color="blue.500">
-            UIT-W2F
-          </Text>
-        </HStack>
-        
-        <HStack spacing={4}>
-          <Text>Xin chào, {user?.username || 'User'}</Text>
-        </HStack>
-      </Flex>
+        <Container maxW="container.xl">
+          <Flex h="16" alignItems="center" justifyContent="space-between">
+            {/* Logo and Brand */}
+            <HStack
+              spacing={2}
+              cursor="pointer"
+              onClick={() => navigate("/homepage")}
+            >
+              <Image 
+                src={logoImage} 
+                alt="UIT Logo" 
+                w="40px" 
+                h="40px"
+              />
+              <Text fontSize="xl" fontWeight="bold" color="blue.500">
+                UIT-W2F
+              </Text>
+            </HStack>
+
+            {/* Navigation Menu - Desktop */}
+            <HStack spacing={1} display={{ base: "none", md: "flex" }}>
+              {menuItems.map((item) => (
+                <IconButton
+                  key={item.name}
+                  icon={<item.icon size={20} />}
+                  variant="ghost"
+                  size="lg"
+                  borderRadius="xl"
+                  bg={location.pathname === item.path ? hoverBg : "transparent"}
+                  color={location.pathname === item.path ? "blue.500" : "gray.600"}
+                  _hover={{ bg: hoverBg }}
+                  onClick={() => navigate(item.path)}
+                  aria-label={item.name}
+                  title={item.name}
+                />
+              ))}
+            </HStack>
+
+            {/* Right Side - Messages, Notifications, Profile */}
+            <HStack spacing={2}>
+              {/* Messages */}
+              <MessageCenter />
+              
+              {/* Notifications */}
+              <NotificationCenter />
+
+              {/* Profile Menu */}
+              <Menu>
+                <MenuButton
+                  as={Button}
+                  variant="ghost"
+                  size="lg"
+                  borderRadius="xl"
+                  _hover={{ bg: hoverBg }}
+                  px={3}
+                  h="40px"
+                  leftIcon={
+                    <Avatar 
+                      size="sm" 
+                      name={user?.full_name || user?.username} 
+                      src={user?.avatar_url ? `http://localhost:8000${user.avatar_url}` : undefined}
+                      w="32px"
+                      h="32px"
+                    />
+                  }
+                >
+                  <Text 
+                    display={{ base: "none", md: "block" }}
+                    fontSize="md"
+                    fontWeight="medium"
+                    color="gray.700"
+                    _dark={{ color: "gray.200" }}
+                  >
+                    {user?.full_name || user?.username || 'User'}
+                  </Text>
+                </MenuButton>
+                <MenuList>
+                  <MenuItem
+                    icon={<FiUser />}
+                    onClick={() => navigate(`/profile/${user?.username || 'me'}`)}
+                  >
+                    Trang cá nhân
+                  </MenuItem>
+                  <MenuItem 
+                    icon={<FiSettings />}
+                    onClick={() => navigate('/edit-profile')}
+                  >
+                    Sửa hồ sơ cá nhân
+                  </MenuItem>
+                  <MenuItem 
+                    icon={<FiLock />}
+                    onClick={() => navigate('/change-password')}
+                  >
+                    Đổi mật khẩu
+                  </MenuItem>
+                  <MenuDivider />
+                  <MenuItem
+                    icon={<FiLogOut />}
+                    onClick={handleLogout}
+                    color="red.500"
+                  >
+                    Đăng xuất
+                  </MenuItem>
+                </MenuList>
+              </Menu>
+            </HStack>
+          </Flex>
+        </Container>
+      </Box>
       
-      <Box ml={{ base: 0, md: 60 }} p="4">
+      {/* Main Content */}
+      <Box pt="16" pb={{ base: "20", md: "0" }} minH="100vh">
         {children}
+      </Box>
+
+      {/* Mobile Bottom Navigation */}
+      <Box
+        position="fixed"
+        bottom={0}
+        left={0}
+        right={0}
+        zIndex={1000}
+        bg={bg}
+        borderTop="1px"
+        borderTopColor={borderColor}
+        display={{ base: "block", md: "none" }}
+        shadow="lg"
+      >
+        <HStack spacing={0} justify="space-around" py={2}>
+          {menuItems.map((item) => (
+            <IconButton
+              key={item.name}
+              icon={<item.icon size={24} />}
+              variant="ghost"
+              size="lg"
+              color={location.pathname === item.path ? "blue.500" : "gray.600"}
+              _hover={{ bg: hoverBg }}
+              onClick={() => navigate(item.path)}
+              aria-label={item.name}
+              borderRadius="xl"
+              flex={1}
+            />
+          ))}
+          <IconButton
+            icon={<FiMessageSquare size={24} />}
+            variant="ghost"
+            size="lg"
+            color={location.pathname === "/chat" ? "blue.500" : "gray.600"}
+            _hover={{ bg: hoverBg }}
+            onClick={() => navigate("/chat")}
+            aria-label="Chat"
+            borderRadius="xl"
+            flex={1}
+          />
+        </HStack>
       </Box>
     </Box>
   );

@@ -12,6 +12,9 @@ import ChatPage from "./pages/ChatPage";
 import Dangtin from "./pages/Dangtin";
 import ProfilePage from "./pages/ProfilePage";
 import EditPost from "./pages/EditPost";
+import PostDetailPage from "./pages/PostDetailPage";
+import EditProfile from "./pages/EditProfile";
+import ChangePassword from "./pages/ChangePassword";
 
 function App() {
   return (
@@ -72,6 +75,30 @@ function App() {
               element={
                 <ProtectedRoute>
                   <EditPost />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/posts/:postId" 
+              element={
+                <ProtectedRoute>
+                  <PostDetailPage />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/edit-profile" 
+              element={
+                <ProtectedRoute>
+                  <EditProfile />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/change-password" 
+              element={
+                <ProtectedRoute>
+                  <ChangePassword />
                 </ProtectedRoute>
               } 
             />

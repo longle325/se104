@@ -349,10 +349,6 @@ const RegisterPage = () => {
               Login
             </Link>
           </Text>
-          
-          <Text color="gray.300" fontSize="sm" textAlign="center" mt={2}>
-            Tên sẽ được tự động lấy từ MSSV, username tạo từ email và dùng để đăng nhập
-          </Text>
         </Stack>
       </Box>
     </Flex>

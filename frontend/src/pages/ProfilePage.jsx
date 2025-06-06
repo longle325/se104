@@ -50,18 +50,12 @@ import Navigation from "../components/Navigation";
 const ProfilePage = () => {
   const [profile, setProfile] = useState(null);
   const [userPosts, setUserPosts] = useState([]);
-  const [editData, setEditData] = useState({
-    bio: "",
-    facebook: "",
-    instagram: ""
-  });
   const [loading, setLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
   const [postToDelete, setPostToDelete] = useState(null);
   const { username } = useParams();
   const { getAuthHeader, user } = useAuth();
-  const { isOpen, onOpen, onClose } = useDisclosure();
+
   const { 
     isOpen: isPostModalOpen, 
     onOpen: onPostModalOpen, 
@@ -89,11 +83,6 @@ const ProfilePage = () => {
       if (response.ok) {
         const data = await response.json();
         setProfile(data);
-        setEditData({
-          bio: data.bio || "",
-          facebook: data.facebook || "",
-          instagram: data.instagram || ""
-        });
       } else {
         throw new Error("Failed to fetch profile");
       }
@@ -127,41 +116,7 @@ const ProfilePage = () => {
     }
   };
 
-  const updateProfile = async () => {
-    try {
-      const response = await fetch(`http://localhost:8000/profile/${username}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeader(),
-        },
-        body: JSON.stringify(editData),
-      });
 
-      if (response.ok) {
-        toast({
-          title: "Thành công",
-          description: "Cập nhật profile thành công",
-          status: "success",
-          duration: 3000,
-          isClosable: true,
-        });
-        fetchProfile();
-        onClose();
-      } else {
-        const error = await response.json();
-        throw new Error(error.detail || "Cập nhật profile thất bại");
-      }
-    } catch (error) {
-      toast({
-        title: "Lỗi",
-        description: error.message || "Có lỗi xảy ra khi cập nhật profile",
-        status: "error",
-        duration: 3000,
-        isClosable: true,
-      });
-    }
-  };
 
   const viewPostDetails = (post) => {
     setSelectedPost(post);
@@ -349,7 +304,7 @@ const ProfilePage = () => {
                         leftIcon={<FiEdit />}
                         colorScheme="blue"
                         variant="outline"
-                        onClick={onOpen}
+                        onClick={() => navigate('/edit-profile')}
                       >
                         Chỉnh sửa
                       </Button>
@@ -555,78 +510,7 @@ const ProfilePage = () => {
         </Grid>
       </Container>
 
-      {/* Edit Profile Modal */}
-      <Modal isOpen={isOpen} onClose={onClose} size="lg">
-        <ModalOverlay />
-        <ModalContent>
-          <ModalHeader>Chỉnh sửa thông tin cá nhân</ModalHeader>
-          <ModalCloseButton />
-          <ModalBody pb={6}>
-            <VStack spacing={4}>
-              <FormControl>
-                <FormLabel>Họ và tên</FormLabel>
-                <Input
-                  value={profile?.full_name || "Chưa cập nhật"}
-                  placeholder="Tự động lấy từ thông tin đăng ký"
-                  isReadOnly
-                  bg="gray.50"
-                />
-              </FormControl>
 
-              <FormControl>
-                <FormLabel>Mã số sinh viên</FormLabel>
-                <Input
-                  value={profile?.username || "Chưa cập nhật"}
-                  placeholder="Tự động lấy từ email"
-                  isReadOnly
-                  bg="gray.50"
-                />
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Giới thiệu</FormLabel>
-                <Textarea
-                  value={editData.bio}
-                  onChange={(e) => setEditData(prev => ({
-                    ...prev,
-                    bio: e.target.value
-                  }))}
-                  placeholder="Viết gì đó về bản thân..."
-                  rows={4}
-                />
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Facebook URL</FormLabel>
-                <Input
-                  value={editData.facebook}
-                  onChange={(e) => setEditData(prev => ({
-                    ...prev,
-                    facebook: e.target.value
-                  }))}
-                  placeholder="https://facebook.com/username"
-                />
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Instagram URL</FormLabel>
-                <Input
-                  value={editData.instagram}
-                  onChange={(e) => setEditData(prev => ({
-                    ...prev,
-                    instagram: e.target.value
-                  }))}
-                  placeholder="https://instagram.com/username"
-                />
-              </FormControl>
-
-              <Button colorScheme="blue" w="full" onClick={updateProfile}>
-                Lưu thay đổi
-              </Button>
-            </VStack>
-          </ModalBody>
-        </ModalContent>
-      </Modal>
 
       {/* Post Detail Modal */}
       <Modal isOpen={isPostModalOpen} onClose={onPostModalClose} size="2xl">

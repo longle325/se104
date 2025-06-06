@@ -20,16 +20,41 @@ export const AuthProvider = ({ children }) => {
     // Check if user is logged in on app start
     const token = Cookies.get('access_token');
     if (token) {
-      // You could verify the token with the backend here
       setIsAuthenticated(true);
-      // You might want to decode the token to get user info
       const userData = Cookies.get('user_data');
       if (userData) {
-        setUser(JSON.parse(userData));
+        const parsedUser = JSON.parse(userData);
+        setUser(parsedUser);
+        // Load updated profile data to get avatar and latest full_name
+        loadUserProfile(parsedUser.username, token);
       }
     }
     setLoading(false);
   }, []);
+
+  const loadUserProfile = async (username, token) => {
+    try {
+      const response = await fetch(`http://localhost:8000/profile/${username}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (response.ok) {
+        const profileData = await response.json();
+        setUser(prevUser => {
+          const updatedUser = {
+            ...prevUser,
+            full_name: profileData.full_name,
+            avatar_url: profileData.avatar_url,
+            student_id: profileData.student_id
+          };
+          Cookies.set('user_data', JSON.stringify(updatedUser), { expires: 1 });
+          return updatedUser;
+        });
+      }
+    } catch (error) {
+      console.error('Error loading user profile:', error);
+    }
+  };
 
   const login = (userData, token) => {
     Cookies.set('access_token', token, { expires: 1 }); // 1 day

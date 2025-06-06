@@ -26,6 +26,7 @@ import {
   ModalContent,
   ModalHeader,
   ModalBody,
+  ModalFooter,
   ModalCloseButton,
   useDisclosure,
   Divider,
@@ -38,11 +39,17 @@ import {
   NumberInputField,
   NumberInputStepper,
   NumberIncrementStepper,
-  NumberDecrementStepper
+  NumberDecrementStepper,
+  FormControl,
+  FormLabel,
+  Textarea,
+  Avatar,
+  Skeleton,
+  SkeletonText
 } from "@chakra-ui/react";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { FiSearch, FiMapPin, FiClock, FiUser, FiMessageCircle, FiPlus, FiEye, FiShare2, FiFilter, FiX, FiChevronLeft, FiChevronRight, FiEdit, FiTrash2 } from "react-icons/fi";
+import { FiSearch, FiMapPin, FiClock, FiUser, FiMessageCircle, FiPlus, FiEye, FiShare2, FiFilter, FiX, FiChevronLeft, FiChevronRight, FiEdit, FiTrash2, FiFlag } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import Navigation from "../components/Navigation";
 
@@ -55,6 +62,7 @@ import calendarIcon from "../assets/HOMEPAGE/calendar_747310.png";
 const Homepage = () => {
   const [posts, setPosts] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [filters, setFilters] = useState({
     timeRange: "",
@@ -69,12 +77,15 @@ const Homepage = () => {
   const toast = useToast();
   const navigate = useNavigate();
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const { isOpen: isReportOpen, onOpen: onReportOpen, onClose: onReportClose } = useDisclosure();
+  const [reportData, setReportData] = useState({ reason: '', description: '' });
+  const [submittingReport, setSubmittingReport] = useState(false);
 
   const bg = useColorModeValue("gray.50", "gray.800");
   const cardBg = useColorModeValue("white", "gray.700");
   const borderColor = useColorModeValue("gray.200", "gray.600");
 
-  const postsPerPage = 24;
+  const postsPerPage = 16;
 
   const categories = [
     { name: "Tất cả", value: "", color: "gray" },
@@ -136,6 +147,15 @@ const Homepage = () => {
       setLoading(false);
     }
   };
+
+  // Debounce search term
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   useEffect(() => {
     fetchPosts();
@@ -247,10 +267,10 @@ const Homepage = () => {
 
   const filteredPosts = posts.filter(post => {
     // Text search
-    const matchesSearch = !searchTerm || 
-      post.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      post.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (post.location && post.location.toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesSearch = !debouncedSearchTerm || 
+      post.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      post.content.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      (post.location && post.location.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
 
     // Time filter
     const matchesTime = matchesTimeFilter(post, filters.timeRange);
@@ -276,7 +296,7 @@ const Homepage = () => {
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filters.timeRange, filters.location, filters.itemType]);
+  }, [debouncedSearchTerm, filters.timeRange, filters.location, filters.itemType]);
 
   // Scroll to top when page changes
   useEffect(() => {
@@ -351,7 +371,8 @@ const Homepage = () => {
 
   const handleContactWithPost = async (postAuthor, postId, postTitle) => {
     try {
-      const message = `Chào bạn! Tôi quan tâm đến bài đăng "${postTitle}" của bạn. Có thể liên hệ để biết thêm chi tiết không?`;
+      const postLink = `${window.location.origin}/posts/${postId}`;
+      const message = `Chào bạn! Tôi quan tâm đến bài đăng "${postTitle}" của bạn.\n\n📝 Bài đăng: ${postLink}\n\nCó thể liên hệ để biết thêm chi tiết không?`;
       
       const response = await fetch(`http://localhost:8000/conversations/${postAuthor}/messages`, {
         method: 'POST',
@@ -362,14 +383,15 @@ const Homepage = () => {
         body: JSON.stringify({
           to_user: postAuthor,
           content: message,
-          post_id: postId
+          post_id: postId,
+          post_link: postLink
         }),
       });
 
       if (response.ok) {
         toast({
           title: "Thành công",
-          description: "Tin nhắn đã được gửi",
+          description: "Tin nhắn đã được gửi với liên kết bài đăng",
           status: "success",
           duration: 3000,
           isClosable: true,
@@ -392,20 +414,122 @@ const Homepage = () => {
     }
   };
 
+  const reportPost = async (postId) => {
+    if (!user) {
+      toast({
+        title: "Lỗi",
+        description: "Vui lòng đăng nhập để báo cáo bài viết",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    
+    const postToReport = posts.find(p => p.id === postId);
+    setSelectedPost(postToReport);
+    onReportOpen();
+  };
+
+  const handleSubmitReport = async () => {
+    if (!reportData.reason) {
+      toast({
+        title: "Lỗi", 
+        description: "Vui lòng chọn lý do báo cáo",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    try {
+      setSubmittingReport(true);
+      const response = await fetch(`http://localhost:8000/posts/${selectedPost.id}/report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify(reportData),
+      });
+
+      if (response.ok) {
+        toast({
+          title: "Thành công",
+          description: "Báo cáo đã được gửi. Chúng tôi sẽ xem xét và xử lý sớm nhất có thể.",
+          status: "success",
+          duration: 5000,
+          isClosable: true,
+        });
+        onReportClose();
+        setReportData({ reason: '', description: '' });
+      } else if (response.status === 400) {
+        const errorData = await response.json();
+        toast({
+          title: "Lỗi",
+          description: errorData.detail || "Không thể gửi báo cáo",
+          status: "error", 
+          duration: 3000,
+          isClosable: true,
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Lỗi",
+        description: "Không thể gửi báo cáo",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
+
+  const sharePost = (post) => {
+    const postUrl = `${window.location.origin}/posts/${post.id}`;
+    if (navigator.share) {
+      navigator.share({
+        title: post.title,
+        text: post.content,
+        url: postUrl,
+      });
+    } else {
+      navigator.clipboard.writeText(postUrl);
+      toast({
+        title: "Đã sao chép",
+        description: "Liên kết bài viết đã được sao chép vào clipboard",
+        status: "success",
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  };
+
+  const reportReasons = [
+    { value: 'spam', label: 'Spam hoặc quảng cáo' },
+    { value: 'inappropriate', label: 'Nội dung không phù hợp' },
+    { value: 'fake', label: 'Thông tin giả mạo' },
+    { value: 'other', label: 'Lý do khác' }
+  ];
+
   return (
     <Navigation>
-      <Container maxW="6xl" py={6}>
+      <Container maxW="6xl" py={4}>
         {/* Header Section - Simple & Clean */}
         <VStack spacing={6} mb={8}>
           {/* Title */}
           <VStack spacing={2} textAlign="center">
             <Heading size="lg" color="gray.800">
-              UIT - Tìm đồ thất lạc
+              UIT - WHERE TO FIND
             </Heading>
             <Text color="gray.600" fontSize="md">
-              Nền tảng kết nối sinh viên UIT - Tìm kiếm đồ vật thất lạc
+              Nền tảng kết nối tìm kiếm đồ vật thất lạc cho sinh viên trường ĐH CNTT
             </Text>
           </VStack>
+
+
 
           {/* Search and Actions */}
           <HStack spacing={4} w="full" maxW="4xl">
@@ -445,14 +569,6 @@ const Homepage = () => {
             >
               Đăng tin
             </Button>
-            <Button
-              leftIcon={<Icon as={FiMessageCircle} />}
-              variant="outline"
-              colorScheme="blue"
-              onClick={() => navigate("/chat")}
-            >
-              Chat
-            </Button>
           </HStack>
 
           {/* Advanced Filters */}
@@ -478,7 +594,25 @@ const Homepage = () => {
                   />
                 </HStack>
                 
-                <Grid templateColumns={{ base: "1fr", md: "repeat(4, 1fr)" }} gap={4} w="full">
+                <Grid templateColumns={{ base: "1fr", md: "repeat(5, 1fr)" }} gap={4} w="full">
+                  {/* Category Filter */}
+                  <GridItem>
+                    <VStack align="start" spacing={2}>
+                      <Text fontSize="sm" fontWeight="medium">Loại bài đăng</Text>
+                      <Select
+                        size="sm"
+                        value={selectedCategory}
+                        onChange={(e) => setSelectedCategory(e.target.value)}
+                      >
+                        {categories.map((category) => (
+                          <option key={category.value} value={category.value}>
+                            {category.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </VStack>
+                  </GridItem>
+
                   {/* Time Filter */}
                   <GridItem>
                     <VStack align="start" spacing={2}>
@@ -541,12 +675,15 @@ const Homepage = () => {
                         size="sm"
                         variant="outline"
                         colorScheme="red"
-                        onClick={() => setFilters({
-                          timeRange: "",
-                          location: "",
-                          itemType: "",
-                          showFilters: true
-                        })}
+                        onClick={() => {
+                          setFilters({
+                            timeRange: "",
+                            location: "",
+                            itemType: "",
+                            showFilters: true
+                          });
+                          setSelectedCategory("");
+                        }}
                       >
                         Xóa bộ lọc
                       </Button>
@@ -557,33 +694,32 @@ const Homepage = () => {
             </Box>
           </Collapse>
 
-          {/* Category Filters */}
-          <VStack spacing={2}>
-            <Text fontSize="sm" fontWeight="medium" color="gray.600">Loại bài đăng:</Text>
-            <HStack spacing={2}>
-              {categories.map((category) => (
-                <Button
-                  key={category.value}
-                  size="sm"
-                  variant={selectedCategory === category.value ? "solid" : "outline"}
-                  colorScheme={category.color}
-                  onClick={() => setSelectedCategory(category.value)}
-                  borderRadius="full"
-                >
-                  {category.name}
-                </Button>
-              ))}
-            </HStack>
-          </VStack>
+
         </VStack>
 
-        {/* Posts Grid - Compact Cards */}
+        {/* Posts Grid - 4 columns with larger thumbnails */}
         {loading ? (
-          <Center py={10}>
-            <Text>Đang tải...</Text>
-          </Center>
+          <SimpleGrid columns={{ base: 2, md: 3, lg: 4 }} spacing={4}>
+            {Array.from({ length: 8 }).map((_, index) => (
+              <Card key={index} bg={cardBg} border="1px solid" borderColor={borderColor} h="380px">
+                <CardBody p={4}>
+                  <Skeleton height="160px" borderRadius="md" mb={3} />
+                  <SkeletonText mt={2} noOfLines={2} spacing={2} />
+                  <Skeleton height="20px" width="60%" mt={3} />
+                  <SkeletonText mt={3} noOfLines={1} spacing={2} />
+                  <HStack mt={4} justify="space-between">
+                    <Skeleton height="32px" width="60px" />
+                    <HStack spacing={2}>
+                      <Skeleton height="32px" width="32px" />
+                      <Skeleton height="32px" width="32px" />
+                    </HStack>
+                  </HStack>
+                </CardBody>
+              </Card>
+            ))}
+          </SimpleGrid>
         ) : (
-          <SimpleGrid columns={{ base: 2, md: 4, lg: 5, xl: 6 }} spacing={3}>
+          <SimpleGrid columns={{ base: 2, md: 3, lg: 4 }} spacing={4}>
             {currentPosts.map((post, index) => (
               <Card
                 key={post.id}
@@ -592,88 +728,155 @@ const Homepage = () => {
                 borderColor={borderColor}
                 shadow="sm"
                 _hover={{ 
-                  shadow: "md", 
+                  shadow: "lg", 
                   borderColor: "blue.300",
                   cursor: "pointer",
-                  transform: "translateY(-1px)"
+                  transform: "translateY(-2px)"
                 }}
-                transition="all 0.2s"
-                onClick={() => handlePostClick(post)}
-                h="220px"
+                transition="all 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+                onClick={() => navigate(`/posts/${post.id}`)}
+                h="380px"
               >
-                <CardBody p={3} display="flex" flexDirection="column" h="full">
+                <CardBody p={4} display="flex" flexDirection="column" h="full">
                   {/* Image */}
-                  <Box mb={2} flexShrink={0}>
+                  <Box mb={3} flexShrink={0} position="relative" overflow="hidden" borderRadius="md">
                     {post.image_urls && post.image_urls.length > 0 ? (
                       <Image
                         src={`http://localhost:8000${post.image_urls[0]}`}
                         alt={post.title}
                         w="full"
-                        h="100px"
+                        h="160px"
                         objectFit="cover"
                         borderRadius="md"
+                        loading="lazy"
+                        transition="all 0.3s ease"
+                        _hover={{ transform: "scale(1.05)" }}
+                        fallbackSrc="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIwIiBoZWlnaHQ9IjE2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjdmYWZjIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk0YTNiOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkRhbmcgdOG6o2k8L3RleHQ+PC9zdmc+"
+                        onLoad={(e) => {
+                          e.target.style.filter = 'blur(0px)';
+                        }}
+                        onLoadStart={(e) => {
+                          e.target.style.filter = 'blur(5px)';
+                          e.target.style.transition = 'filter 0.3s ease';
+                        }}
                       />
                     ) : (
                       <Box
                         w="full"
-                        h="100px"
+                        h="160px"
                         bg="gray.100"
                         borderRadius="md"
                         display="flex"
                         alignItems="center"
                         justifyContent="center"
+                        transition="all 0.2s ease"
+                        _hover={{ bg: "gray.200" }}
                       >
-                        <Icon as={FiUser} color="gray.400" fontSize="2xl" />
+                        <Icon as={FiUser} color="gray.400" fontSize="4xl" />
                       </Box>
                     )}
                   </Box>
 
                   {/* Content */}
-                  <VStack align="start" spacing={1} flex={1}>
+                  <VStack align="start" spacing={2} flex={1}>
                     {/* Title */}
-                    <Heading size="xs" color="blue.600" noOfLines={2} lineHeight="1.2">
+                    <Heading size="sm" color="blue.600" noOfLines={2} lineHeight="1.3" fontWeight="semibold">
                       {post.title}
                     </Heading>
 
                     {/* Location */}
                     {post.location && (
-                      <HStack spacing={1} fontSize="xs" color="gray.600">
-                        <Icon as={FiMapPin} fontSize="xs" />
-                        <Text noOfLines={1}>{post.location}</Text>
+                      <HStack spacing={1} fontSize="sm" color="gray.600">
+                        <Icon as={FiMapPin} fontSize="sm" />
+                        <Text noOfLines={1} fontWeight="medium">{post.location}</Text>
                       </HStack>
                     )}
 
-                    {/* Category Badge */}
-                    <Badge
-                      colorScheme={getCategoryColor(post.category)}
-                      variant="subtle"
-                      fontSize="xs"
-                      alignSelf="start"
-                    >
-                      {getCategoryName(post.category)}
-                    </Badge>
+                    {/* Category and Status */}
+                    <HStack spacing={2} w="full" flexWrap="wrap">
+                      <Badge
+                        colorScheme={getCategoryColor(post.category)}
+                        variant="solid"
+                        fontSize="xs"
+                        px={2}
+                        py={1}
+                        borderRadius="full"
+                      >
+                        {getCategoryName(post.category)}
+                      </Badge>
+                      {getStatusDisplay(post.category, post.status) && (
+                        <Badge
+                          colorScheme={getStatusDisplay(post.category, post.status).color}
+                          variant="outline"
+                          fontSize="xs"
+                          px={2}
+                          py={1}
+                          borderRadius="full"
+                        >
+                          {getStatusDisplay(post.category, post.status).text}
+                        </Badge>
+                      )}
+                    </HStack>
 
-                    {/* Bottom - Time and Share */}
-                    <HStack justify="space-between" w="full" fontSize="xs" color="gray.500" mt="auto">
-                      <HStack spacing={1}>
-                        <Icon as={FiClock} fontSize="xs" />
-                        <Text>{formatDate(post.created_at)}</Text>
+                    {/* Author and Time */}
+                    <VStack align="start" spacing={1} w="full" fontSize="xs" color="gray.500">
+                      <HStack spacing={2} w="full" justify="space-between">
+                        <HStack spacing={1}>
+                          <Avatar 
+                            size="xs" 
+                            name={post.author_info?.full_name || post.author}
+                            src={post.author_info?.avatar_url ? `http://localhost:8000${post.author_info.avatar_url}` : undefined}
+                          />
+                          <Text fontWeight="medium">
+                            {post.author_info?.full_name || post.author}
+                          </Text>
+                        </HStack>
+                        <HStack spacing={1}>
+                          <Icon as={FiClock} fontSize="xs" />
+                          <Text>{formatDate(post.created_at)}</Text>
+                        </HStack>
                       </HStack>
+                    </VStack>
+
+                    {/* Action Buttons */}
+                    <HStack justify="space-between" w="full" mt="auto" pt={2}>
                       <Button
-                        size="xs"
-                        variant="ghost"
+                        size="sm"
+                        variant="outline"
                         colorScheme="blue"
                         fontSize="xs"
-                        p={1}
-                        minW="auto"
-                        h="auto"
+                        leftIcon={<Icon as={FiEye} />}
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Share functionality
+                          navigate(`/posts/${post.id}`);
                         }}
                       >
-                        <Icon as={FiShare2} fontSize="xs" />
+                        Xem
                       </Button>
+                      <HStack spacing={1}>
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          colorScheme="blue"
+                          icon={<Icon as={FiShare2} fontSize="sm" />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            sharePost(post);
+                          }}
+                          aria-label="Chia sẻ"
+                        />
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          colorScheme="red"
+                          icon={<Icon as={FiFlag} fontSize="sm" />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            reportPost(post.id);
+                          }}
+                          aria-label="Báo cáo"
+                        />
+                      </HStack>
                     </HStack>
                   </VStack>
                 </CardBody>
@@ -869,18 +1072,23 @@ const Homepage = () => {
                   {selectedPost.image_urls && selectedPost.image_urls.length > 0 && (
                     <SimpleGrid columns={selectedPost.image_urls.length === 1 ? 1 : 2} spacing={2}>
                       {selectedPost.image_urls.map((imageUrl, index) => (
+                        <Box key={index} position="relative" overflow="hidden" borderRadius="md">
                           <Image
-                            key={index}
                             src={`http://localhost:8000${imageUrl}`}
-                          alt={`${selectedPost.title} image ${index + 1}`}
+                            alt={`${selectedPost.title} image ${index + 1}`}
                             borderRadius="md"
                             objectFit="cover"
-                          maxH="300px"
+                            maxH="300px"
                             w="full"
+                            loading="lazy"
+                            transition="all 0.3s ease"
+                            _hover={{ transform: "scale(1.02)" }}
+                            fallbackSrc="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjdmYWZjIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNiIgZmlsbD0iIzk0YTNiOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkRhbmcgdOG6o2kgaOG7i25oIGFuaDwvdGV4dD48L3N2Zz4="
                           />
-                        ))}
-                      </SimpleGrid>
-                    )}
+                        </Box>
+                      ))}
+                    </SimpleGrid>
+                  )}
 
                   {/* Content */}
                   <Box>
@@ -901,7 +1109,11 @@ const Homepage = () => {
                     )}
                     
                     <HStack>
-                      <Icon as={FiUser} color="gray.500" />
+                      <Avatar 
+                        size="sm" 
+                        name={selectedPost.author_info?.full_name || selectedPost.author}
+                        src={selectedPost.author_info?.avatar_url ? `http://localhost:8000${selectedPost.author_info.avatar_url}` : undefined}
+                      />
                       <Text>
                         <Text as="span" fontWeight="medium">Người đăng:</Text>{" "}
                         {user && selectedPost?.author !== user.username ? (
@@ -915,10 +1127,10 @@ const Homepage = () => {
                               onClose();
                             }}
                           >
-                            {selectedPost.author}
+                            {selectedPost.author_info?.full_name || selectedPost.author}
                           </Text>
                         ) : (
-                          <Text as="span">{selectedPost.author}</Text>
+                          <Text as="span">{selectedPost.author_info?.full_name || selectedPost.author}</Text>
                         )}
                       </Text>
                     </HStack>
@@ -989,15 +1201,78 @@ const Homepage = () => {
                         Liên hệ ngay
                       </Button>
                     )}
-                    <IconButton
-                      icon={<Icon as={FiShare2} />}
+                    <Button
+                      leftIcon={<Icon as={FiShare2} />}
                       variant="outline"
-                      aria-label="Chia sẻ"
-                    />
+                      size="sm"
+                      onClick={() => sharePost(selectedPost)}
+                    >
+                      Chia sẻ
+                    </Button>
+                    <Button
+                      leftIcon={<Icon as={FiFlag} />}
+                      variant="outline"
+                      colorScheme="red"
+                      size="sm"
+                      onClick={() => {
+                        onClose();
+                        onReportOpen();
+                      }}
+                    >
+                      Báo cáo
+                    </Button>
                   </HStack>
                   </VStack>
               )}
             </ModalBody>
+          </ModalContent>
+        </Modal>
+
+        {/* Report Modal */}
+        <Modal isOpen={isReportOpen} onClose={onReportClose}>
+          <ModalOverlay />
+          <ModalContent>
+            <ModalHeader>Báo cáo bài viết</ModalHeader>
+            <ModalCloseButton />
+            <ModalBody>
+              <VStack spacing={4}>
+                <FormControl>
+                  <FormLabel>Lý do báo cáo</FormLabel>
+                  <Select
+                    placeholder="Chọn lý do..."
+                    value={reportData.reason}
+                    onChange={(e) => setReportData(prev => ({ ...prev, reason: e.target.value }))}
+                  >
+                    {reportReasons.map((reason) => (
+                      <option key={reason.value} value={reason.value}>
+                        {reason.label}
+                      </option>
+                    ))}
+                  </Select>
+                </FormControl>
+                
+                <FormControl>
+                  <FormLabel>Mô tả chi tiết (không bắt buộc)</FormLabel>
+                  <Textarea
+                    placeholder="Mô tả chi tiết về vấn đề..."
+                    value={reportData.description}
+                    onChange={(e) => setReportData(prev => ({ ...prev, description: e.target.value }))}
+                  />
+                </FormControl>
+              </VStack>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="ghost" mr={3} onClick={onReportClose}>
+                Hủy
+              </Button>
+              <Button
+                colorScheme="red"
+                onClick={handleSubmitReport}
+                isLoading={submittingReport}
+              >
+                Gửi báo cáo
+              </Button>
+            </ModalFooter>
           </ModalContent>
         </Modal>
       </Container>

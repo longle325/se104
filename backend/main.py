@@ -29,7 +29,7 @@ from oauth import get_current_user, create_access_token
 from models import (
     User, UserRegistration, Login, Token, TokenData, EmailVerification, PasswordResetRequest, 
     VerificationCode, PasswordReset, UserProfile, Post, PostResponse, 
-    DirectMessage, DirectMessageResponse, Conversation, PostUpdate
+    DirectMessage, DirectMessageResponse, Conversation, PostUpdate, PostReport, PostReportResponse, Comment, CommentResponse, Notification, NotificationResponse
 )
 
 # Load environment variables
@@ -37,7 +37,7 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1200"))
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "your_email@gmail.com")
@@ -458,7 +458,8 @@ def login(request: Login):
         "user": {
             "username": user["username"],
             "email": user["email"],
-            "full_name": user.get("full_name")
+            "full_name": user.get("full_name"),
+            "avatar_url": user.get("avatar_url")
         }
     }
 
@@ -628,6 +629,20 @@ def get_user_profile(username: str, current_user: User = Depends(get_current_use
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
+    # Load student mapping to ensure we have latest real names
+    student_mapping = load_student_mapping()
+    
+    # Update full_name from mapping if student_id exists
+    if user.get("student_id") and user["student_id"] in student_mapping:
+        current_full_name = student_mapping[user["student_id"]]
+        # Update user's full_name in database if it's different
+        if user.get("full_name") != current_full_name:
+            db["User"].update_one(
+                {"username": username},
+                {"$set": {"full_name": current_full_name}}
+            )
+            user["full_name"] = current_full_name
+    
     profile = db["UserProfile"].find_one({"username": username})
     if profile:
         # If profile exists, merge with user data to ensure we have all basic info
@@ -637,6 +652,7 @@ def get_user_profile(username: str, current_user: User = Depends(get_current_use
         profile["email"] = user["email"]
         profile["full_name"] = user.get("full_name")  # Include full_name from User collection
         profile["student_id"] = user.get("student_id")
+        profile["avatar_url"] = user.get("avatar_url")  # Include avatar from User collection
         profile["created_at"] = user.get("created_at")
         return profile
     else:
@@ -644,8 +660,10 @@ def get_user_profile(username: str, current_user: User = Depends(get_current_use
         return {
             "username": user["username"],
             "email": user["email"],
+            "phonenumber": user.get("phonenumber"),
             "full_name": user.get("full_name"),  # Include full_name from User collection
             "student_id": user.get("student_id"),
+            "avatar_url": user.get("avatar_url"),  # Include avatar from User collection
             "created_at": user.get("created_at")
         }
 
@@ -657,6 +675,12 @@ def update_user_profile(username: str, profile_data: UserProfile, current_user: 
     profile_dict = profile_data.dict(exclude_unset=True)
     profile_dict["updated_at"] = get_vietnam_time_naive()
     
+    # Remove protected fields that should not be updated via this endpoint
+    protected_fields = ["username", "full_name", "student_id", "email"]
+    for field in protected_fields:
+        profile_dict.pop(field, None)
+    
+    # Update UserProfile collection
     result = db["UserProfile"].update_one(
         {"username": username},
         {"$set": profile_dict},
@@ -673,9 +697,48 @@ def get_posts(category: Optional[str] = None, limit: int = 20, skip: int = 0):
         filter_dict["category"] = category
     
     posts = list(db["Post"].find(filter_dict).sort("created_at", -1).skip(skip).limit(limit))
+    
+    # Load student mapping for name resolution
+    student_mapping = load_student_mapping()
+    
     for post in posts:
         post["id"] = str(post["_id"])
         del post["_id"]
+        
+        # Check if author field exists and get author's full name and avatar
+        if post.get("author"):
+            author_user = db["User"].find_one({"username": post["author"]}, {"password": 0})
+            if author_user:
+                # Update full_name from mapping if needed
+                if author_user.get("student_id") and author_user["student_id"] in student_mapping:
+                    current_full_name = student_mapping[author_user["student_id"]]
+                    if author_user.get("full_name") != current_full_name:
+                        db["User"].update_one(
+                            {"username": post["author"]},
+                            {"$set": {"full_name": current_full_name}}
+                        )
+                        author_user["full_name"] = current_full_name
+                
+                post["author_info"] = {
+                    "username": author_user["username"],
+                    "full_name": author_user.get("full_name"),
+                    "avatar_url": author_user.get("avatar_url")
+                }
+            else:
+                # Author user not found, use default info
+                post["author_info"] = {
+                    "username": post["author"],
+                    "full_name": post["author"],
+                    "avatar_url": None
+                }
+        else:
+            # No author field, set default values
+            post["author"] = "Unknown"
+            post["author_info"] = {
+                "username": "Unknown",
+                "full_name": "Unknown",
+                "avatar_url": None
+            }
     
     return posts
 
@@ -684,6 +747,7 @@ def create_post(post_data: Post, current_user: User = Depends(get_current_user))
     post_dict = post_data.dict()
     post_dict["author"] = current_user.username
     post_dict["created_at"] = get_vietnam_time_naive()
+    post_dict["view_count"] = 0  # Initialize view count
     
     result = db["Post"].insert_one(post_dict)
     post_dict["id"] = str(result.inserted_id)
@@ -694,12 +758,55 @@ def create_post(post_data: Post, current_user: User = Depends(get_current_user))
 @app.get("/posts/{post_id}")
 def get_post(post_id: str):
     try:
+        # Increment view count
+        db["Post"].update_one(
+            {"_id": ObjectId(post_id)},
+            {"$inc": {"view_count": 1}}
+        )
+        
         post = db["Post"].find_one({"_id": ObjectId(post_id)})
         if not post:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
         
         post["id"] = str(post["_id"])
         del post["_id"]
+        
+        # Load student mapping and get author info
+        student_mapping = load_student_mapping()
+        if post.get("author"):
+            author_user = db["User"].find_one({"username": post["author"]}, {"password": 0})
+            if author_user:
+                # Update full_name from mapping if needed
+                if author_user.get("student_id") and author_user["student_id"] in student_mapping:
+                    current_full_name = student_mapping[author_user["student_id"]]
+                    if author_user.get("full_name") != current_full_name:
+                        db["User"].update_one(
+                            {"username": post["author"]},
+                            {"$set": {"full_name": current_full_name}}
+                        )
+                        author_user["full_name"] = current_full_name
+                
+                post["author_info"] = {
+                    "username": author_user["username"],
+                    "full_name": author_user.get("full_name"),
+                    "avatar_url": author_user.get("avatar_url")
+                }
+            else:
+                # Author user not found, use default info
+                post["author_info"] = {
+                    "username": post["author"],
+                    "full_name": post["author"],
+                    "avatar_url": None
+                }
+        else:
+            # No author field, set default values
+            post["author"] = "Unknown"
+            post["author_info"] = {
+                "username": "Unknown",
+                "full_name": "Unknown",
+                "avatar_url": None
+            }
+        
         return post
     except:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
@@ -784,6 +891,7 @@ def get_conversations(current_user: User = Depends(get_current_user)):
     valid_conversations = []
     for conv in conversations:
         conv["id"] = str(conv["_id"])
+        conversation_id = conv["id"]
         del conv["_id"]
         
         # Get other participant info - safety check for valid conversations
@@ -799,8 +907,35 @@ def get_conversations(current_user: User = Depends(get_current_user)):
             conv["other_user"] = {
                 "username": user_info["username"],
                 "full_name": user_info.get("full_name"),
-                "email": user_info["email"]
+                "email": user_info["email"],
+                "avatar_url": user_info.get("avatar_url")
             }
+            
+            # Get last message
+            last_message = db["DirectMessage"].find_one(
+                {"conversation_id": conversation_id},
+                sort=[("timestamp", -1)]
+            )
+            
+            if last_message:
+                conv["last_message"] = {
+                    "id": str(last_message["_id"]),
+                    "content": last_message["content"],
+                    "from_user": last_message["from_user"],
+                    "timestamp": last_message["timestamp"],
+                    "is_read": last_message.get("is_read", False)
+                }
+            else:
+                conv["last_message"] = None
+            
+            # Get unread count for current user
+            unread_count = db["DirectMessage"].count_documents({
+                "conversation_id": conversation_id,
+                "to_user": current_user.username,
+                "is_read": False
+            })
+            conv["unread_count"] = unread_count
+            
             valid_conversations.append(conv)
         
     return valid_conversations
@@ -822,6 +957,40 @@ def get_messages(other_username: str, limit: int = 50, skip: int = 0, current_us
     for message in messages:
         message["id"] = str(message["_id"])
         del message["_id"]
+        # Ensure all reply fields are present
+        if "reply_to" not in message:
+            message["reply_to"] = None
+        if "reply_content" not in message:
+            message["reply_content"] = None
+        if "reply_author" not in message:
+            message["reply_author"] = None
+        if "is_deleted" not in message:
+            message["is_deleted"] = False
+            
+        # Add author info for from_user and to_user
+        for user_field in ["from_user", "to_user"]:
+            if user_field in message:
+                user_info = db["User"].find_one({"username": message[user_field]}, {"password": 0})
+                if user_info:
+                    message[f"{user_field}_info"] = {
+                        "username": user_info["username"],
+                        "full_name": user_info.get("full_name"),
+                        "avatar_url": user_info.get("avatar_url")
+                    }
+                else:
+                    message[f"{user_field}_info"] = {
+                        "username": message[user_field],
+                        "full_name": None,
+                        "avatar_url": None
+                    }
+                    
+        # Update reply_author to use full_name if available
+        if message.get("reply_author"):
+            reply_author_info = db["User"].find_one({"username": message["reply_author"]}, {"password": 0})
+            if reply_author_info and reply_author_info.get("full_name"):
+                message["reply_author_display"] = reply_author_info["full_name"]
+            else:
+                message["reply_author_display"] = message["reply_author"]
     
     return messages[::-1]  # Return in chronological order
 
@@ -860,7 +1029,9 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
         "to_user": other_username,
         "content": message_data.content,
         "timestamp": get_vietnam_time_naive(),
-        "is_read": False
+        "is_read": False,
+        "is_deleted": False,
+        "reply_to": message_data.reply_to
     }
     
     # Add post information if provided
@@ -873,6 +1044,16 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
             if post:
                 message_dict["post_link"] = f"http://localhost:3000/posts/{message_data.post_id}"
                 message_dict["post_title"] = post.get("title", "")
+        except:
+            pass
+    
+    # Add reply information if provided
+    if message_data.reply_to:
+        try:
+            replied_message = db["DirectMessage"].find_one({"_id": ObjectId(message_data.reply_to)})
+            if replied_message:
+                message_dict["reply_content"] = replied_message.get("content", "")
+                message_dict["reply_author"] = replied_message.get("from_user", "")
         except:
             pass
     
@@ -894,6 +1075,26 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
         message_dict.get("post_title")
     )
     
+    # Create in-app notification for recipient
+    notification_title = "Tin nhắn mới"
+    notification_message = f"{sender_name} đã gửi tin nhắn cho bạn"
+    if message_dict.get("post_title"):
+        notification_message += f' về bài đăng "{message_dict["post_title"]}"'
+    
+    create_notification(
+        user_id=other_username,
+        notification_type="message",
+        title=notification_title,
+        message=notification_message,
+        related_user=current_user.username,
+        data={
+            "conversation_id": conversation_id,
+            "message_id": message_dict["id"],
+            "post_id": message_dict.get("post_id"),
+            "post_link": message_dict.get("post_link")
+        }
+    )
+
     # Send realtime notification to recipient if online
     await manager.broadcast_to_conversation({
         "type": "new_message",
@@ -906,6 +1107,47 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
 async def send_message(message_data: DirectMessage, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """Send a message to another user"""
     return await send_direct_message(message_data.to_user, message_data, background_tasks, current_user)
+
+@app.delete("/messages/{message_id}")
+async def delete_message(message_id: str, current_user: User = Depends(get_current_user)):
+    """Delete/recall a message (only by sender)"""
+    try:
+        # Find the message
+        message = db["DirectMessage"].find_one({"_id": ObjectId(message_id)})
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        # Check if user is the sender
+        if message["from_user"] != current_user.username:
+            raise HTTPException(status_code=403, detail="You can only delete your own messages")
+        
+        # Check if message was sent within last 5 minutes (optional time limit)
+        message_time = message["timestamp"]
+        current_time = get_vietnam_time_naive()
+        time_diff = (current_time - message_time).total_seconds()
+        
+        # Allow deletion within 24 hours
+        if time_diff > 86400:  # 24 hours in seconds
+            raise HTTPException(status_code=403, detail="Cannot delete messages older than 24 hours")
+        
+        # Mark message as deleted instead of actually deleting it
+        db["DirectMessage"].update_one(
+            {"_id": ObjectId(message_id)},
+            {"$set": {"is_deleted": True, "content": "Tin nhắn đã được thu hồi"}}
+        )
+        
+        # Broadcast deletion to all participants
+        participants = [message["from_user"], message["to_user"]]
+        await manager.broadcast_to_conversation({
+            "type": "message_deleted",
+            "message_id": message_id,
+            "deleted_by": current_user.username
+        }, participants)
+        
+        return {"message": "Message deleted successfully"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid message ID")
 
 # WebSocket endpoint for realtime chat
 @app.websocket("/ws/{username}")
@@ -1054,6 +1296,15 @@ def mark_messages_read(other_username: str, current_user: User = Depends(get_cur
     
     return {"message": "Messages marked as read"}
 
+@app.get("/messages/unread-count")
+def get_unread_messages_count(current_user: User = Depends(get_current_user)):
+    """Get total count of unread messages for current user"""
+    count = db["DirectMessage"].count_documents({
+        "to_user": current_user.username,
+        "is_read": False
+    })
+    return {"unread_count": count}
+
 # Image upload endpoint for new posts
 @app.post("/upload-images")
 async def upload_images(files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
@@ -1077,3 +1328,375 @@ async def upload_images(files: List[UploadFile] = File(...), current_user: User 
     except Exception as e:
         print(f"Error uploading images: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload images")
+
+# Avatar upload endpoint
+@app.post("/upload-avatar")
+async def upload_avatar(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    try:
+        # Validate file type
+        if file.content_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+            raise HTTPException(status_code=400, detail=f"Invalid file type: {file.content_type}")
+        
+        timestamp = int(get_vietnam_time_naive().timestamp())
+        
+        # Generate unique filename for avatar
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"avatar_{current_user.username}_{timestamp}_{secrets.token_hex(8)}{file_extension}"
+        file_path = f"uploads/{unique_filename}"
+        
+        # Create uploads directory if it doesn't exist
+        os.makedirs("uploads", exist_ok=True)
+        
+        # Save the file
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        
+        avatar_url = f"/uploads/{unique_filename}"
+        
+        # Update user's avatar in database
+        db["User"].update_one(
+            {"username": current_user.username},
+            {"$set": {"avatar_url": avatar_url}}
+        )
+        
+        return {"avatar_url": avatar_url}
+    except Exception as e:
+        print(f"Error uploading avatar: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload avatar")
+
+# Report Posts
+@app.post("/posts/{post_id}/report")
+def report_post(post_id: str, report_data: PostReport, current_user: User = Depends(get_current_user)):
+    """Report a post for inappropriate content"""
+    # Check if post exists
+    try:
+        post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid post ID")
+    
+    # Check if user has already reported this post
+    existing_report = db["PostReport"].find_one({
+        "post_id": post_id,
+        "reporter": current_user.username
+    })
+    
+    if existing_report:
+        raise HTTPException(status_code=400, detail="You have already reported this post")
+    
+    # Create report
+    report_dict = {
+        "post_id": post_id,
+        "reporter": current_user.username,
+        "reason": report_data.reason,
+        "description": report_data.description,
+        "created_at": get_vietnam_time_naive(),
+        "status": "pending"
+    }
+    
+    result = db["PostReport"].insert_one(report_dict)
+    report_dict["id"] = str(result.inserted_id)
+    del report_dict["_id"]
+    
+    return {"message": "Report submitted successfully", "report": report_dict}
+
+@app.get("/posts/{post_id}/reports")
+def get_post_reports(post_id: str, current_user: User = Depends(get_current_user)):
+    """Get reports for a specific post (admin only)"""
+    # Only allow admin users to view reports
+    if current_user.username != "admin":  # You can adjust this based on your admin system
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    reports = list(db["PostReport"].find({"post_id": post_id}))
+    for report in reports:
+        report["id"] = str(report["_id"])
+        del report["_id"]
+    
+    return reports
+
+# Comments System
+@app.get("/posts/{post_id}/comments")
+def get_post_comments(post_id: str, limit: int = 50, skip: int = 0):
+    """Get comments for a specific post"""
+    try:
+        # Check if post exists
+        post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid post ID")
+    
+    comments = list(db["Comment"].find({"post_id": post_id})
+                   .sort("created_at", -1)
+                   .skip(skip)
+                   .limit(limit))
+    
+    for comment in comments:
+        comment["id"] = str(comment["_id"])
+        del comment["_id"]
+        
+        # Get author info with full_name and avatar
+        author_info = db["User"].find_one({"username": comment["author"]}, {"password": 0})
+        if author_info:
+            comment["author_info"] = {
+                "username": author_info["username"],
+                "full_name": author_info.get("full_name"),
+                "avatar_url": author_info.get("avatar_url")
+            }
+        else:
+            comment["author_info"] = {
+                "username": comment["author"],
+                "full_name": None,
+                "avatar_url": None
+            }
+    
+    return comments
+
+@app.post("/posts/{post_id}/comments")
+def create_comment(post_id: str, comment_data: Comment, current_user: User = Depends(get_current_user)):
+    """Create a new comment on a post"""
+    try:
+        # Check if post exists
+        post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid post ID")
+    
+    # Create comment
+    comment_dict = {
+        "post_id": post_id,
+        "author": current_user.username,
+        "content": comment_data.content,
+        "created_at": get_vietnam_time_naive(),
+        "updated_at": get_vietnam_time_naive()
+    }
+    
+    result = db["Comment"].insert_one(comment_dict)
+    comment_dict["id"] = str(result.inserted_id)
+    del comment_dict["_id"]
+    
+    # Add author info to the response
+    author_info = db["User"].find_one({"username": current_user.username}, {"password": 0})
+    if author_info:
+        comment_dict["author_info"] = {
+            "username": author_info["username"],
+            "full_name": author_info.get("full_name"),
+            "avatar_url": author_info.get("avatar_url")
+        }
+    else:
+        comment_dict["author_info"] = {
+            "username": current_user.username,
+            "full_name": None,
+            "avatar_url": None
+        }
+    
+    # Create notification for post author if it's not their own comment
+    if post["author"] != current_user.username:
+        # Get commenter info
+        commenter_info = db["User"].find_one({"username": current_user.username})
+        commenter_name = commenter_info.get("full_name", current_user.username) if commenter_info else current_user.username
+        
+        create_notification(
+            user_id=post["author"],
+            notification_type="comment",
+            title="Bình luận mới",
+            message=f"{commenter_name} đã bình luận về bài đăng '{post['title']}'",
+            related_post_id=post_id,
+            related_user=current_user.username,
+            data={
+                "comment_id": comment_dict["id"],
+                "post_title": post["title"]
+            }
+        )
+    
+    return comment_dict
+
+@app.delete("/posts/{post_id}/comments/{comment_id}")
+def delete_comment(post_id: str, comment_id: str, current_user: User = Depends(get_current_user)):
+    """Delete a comment (only by author or admin)"""
+    try:
+        comment = db["Comment"].find_one({"_id": ObjectId(comment_id)})
+        if not comment:
+            raise HTTPException(status_code=404, detail="Comment not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid comment ID")
+    
+    # Check if user is the author or admin
+    if comment["author"] != current_user.username and current_user.username != "admin":
+        raise HTTPException(status_code=403, detail="You can only delete your own comments")
+    
+    db["Comment"].delete_one({"_id": ObjectId(comment_id)})
+    
+    return {"message": "Comment deleted successfully"}
+
+# Get similar posts (recommendation algorithm)
+@app.get("/posts/{post_id}/similar")
+def get_similar_posts(post_id: str, limit: int = 5):
+    """Get similar posts based on content, category, location, and item type"""
+    try:
+        # Get the reference post
+        reference_post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not reference_post:
+            raise HTTPException(status_code=404, detail="Post not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid post ID")
+    
+    # Build similarity criteria
+    similarity_criteria = []
+    
+    # Same category (highest priority)
+    if reference_post.get("category"):
+        similarity_criteria.append({"category": reference_post["category"]})
+    
+    # Same item type
+    if reference_post.get("item_type"):
+        similarity_criteria.append({"item_type": reference_post["item_type"]})
+    
+    # Same location
+    if reference_post.get("location"):
+        similarity_criteria.append({"location": reference_post["location"]})
+    
+    # Similar tags
+    if reference_post.get("tags"):
+        similarity_criteria.append({"tags": {"$in": reference_post["tags"]}})
+    
+    # Content similarity (basic keyword matching)
+    if reference_post.get("content"):
+        # Extract key words from content (simple approach)
+        content_words = [word.lower() for word in reference_post["content"].split() 
+                        if len(word) > 3][:5]  # Take first 5 significant words
+        if content_words:
+            content_regex = "|".join(content_words)
+            similarity_criteria.append({
+                "$or": [
+                    {"title": {"$regex": content_regex, "$options": "i"}},
+                    {"content": {"$regex": content_regex, "$options": "i"}}
+                ]
+            })
+    
+    # Query for similar posts
+    similar_posts = []
+    
+    if similarity_criteria:
+        # Use aggregation pipeline to score and sort by relevance
+        pipeline = [
+            {
+                "$match": {
+                    "_id": {"$ne": ObjectId(post_id)},  # Exclude the reference post
+                    "$or": similarity_criteria
+                }
+            },
+            {
+                "$addFields": {
+                    "relevance_score": {
+                        "$sum": [
+                            {"$cond": [{"$eq": ["$category", reference_post.get("category")]}, 10, 0]},
+                            {"$cond": [{"$eq": ["$item_type", reference_post.get("item_type")]}, 5, 0]},
+                            {"$cond": [{"$eq": ["$location", reference_post.get("location")]}, 3, 0]},
+                            {"$cond": [{"$gt": [{"$size": {"$setIntersection": ["$tags", reference_post.get("tags", [])]}}, 0]}, 2, 0]}
+                        ]
+                    }
+                }
+            },
+            {"$sort": {"relevance_score": -1, "created_at": -1}},
+            {"$limit": limit}
+        ]
+        
+        similar_posts = list(db["Post"].aggregate(pipeline))
+    
+    # If not enough similar posts, fill with recent posts from same category
+    if len(similar_posts) < limit:
+        additional_posts = list(db["Post"].find({
+            "_id": {"$ne": ObjectId(post_id)},
+            "category": reference_post.get("category")
+        }).sort("created_at", -1).limit(limit - len(similar_posts)))
+        
+        # Convert ObjectId and avoid duplicates
+        existing_ids = [str(post["_id"]) for post in similar_posts]
+        for post in additional_posts:
+            if str(post["_id"]) not in existing_ids:
+                similar_posts.append(post)
+    
+    # Convert ObjectId to string and format response
+    for post in similar_posts:
+        post["id"] = str(post["_id"])
+        del post["_id"]
+    
+    return similar_posts
+
+# Notifications API
+@app.get("/notifications")
+def get_notifications(limit: int = 50, skip: int = 0, current_user: User = Depends(get_current_user)):
+    """Get notifications for current user"""
+    notifications = list(db["Notification"].find({
+        "user_id": current_user.username
+    }).sort("created_at", -1).skip(skip).limit(limit))
+    
+    for notification in notifications:
+        notification["id"] = str(notification["_id"])
+        del notification["_id"]
+        # Convert datetime to ISO string for JSON serialization
+        if "created_at" in notification and notification["created_at"]:
+            notification["created_at"] = notification["created_at"].isoformat()
+    
+    return notifications
+
+@app.get("/notifications/unread-count")
+def get_unread_notifications_count(current_user: User = Depends(get_current_user)):
+    """Get count of unread notifications"""
+    count = db["Notification"].count_documents({
+        "user_id": current_user.username,
+        "is_read": False
+    })
+    return {"unread_count": count}
+
+@app.put("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str, current_user: User = Depends(get_current_user)):
+    """Mark a notification as read"""
+    try:
+        result = db["Notification"].update_one(
+            {
+                "_id": ObjectId(notification_id),
+                "user_id": current_user.username
+            },
+            {"$set": {"is_read": True}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Notification not found")
+            
+        return {"message": "Notification marked as read"}
+    except:
+        raise HTTPException(status_code=400, detail="Invalid notification ID")
+
+@app.put("/notifications/read-all")
+def mark_all_notifications_read(current_user: User = Depends(get_current_user)):
+    """Mark all notifications as read for current user"""
+    result = db["Notification"].update_many(
+        {"user_id": current_user.username, "is_read": False},
+        {"$set": {"is_read": True}}
+    )
+    
+    return {"message": f"Marked {result.modified_count} notifications as read"}
+
+def create_notification(user_id: str, notification_type: str, title: str, message: str, related_post_id: str = None, related_user: str = None, data: dict = None):
+    """Helper function to create notifications"""
+    notification = {
+        "user_id": user_id,
+        "type": notification_type,
+        "title": title,
+        "message": message,
+        "related_post_id": related_post_id,
+        "related_user": related_user,
+        "data": data or {},
+        "created_at": get_vietnam_time_naive(),
+        "is_read": False
+    }
+    
+    result = db["Notification"].insert_one(notification)
+    notification["id"] = str(result.inserted_id)
+    del notification["_id"]
+    
+    return notification

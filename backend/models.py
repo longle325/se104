@@ -15,7 +15,7 @@ class UserRegistration(BaseModel):
     email: str
     phonenumber: str
     password: str
-    # full_name will be automatically mapped from student_id, so not needed in registration
+
 
 class Login(BaseModel):
     username: str  # Changed back to username for login
@@ -68,6 +68,7 @@ class Post(BaseModel):
     custom_location: Optional[str] = None  # For when location is "khac"
     image_urls: Optional[List[str]] = []
     status: Optional[str] = "active"  # For lost: "found"/"not_found", For found: "returned"/"not_returned"
+    view_count: Optional[int] = 0
     
 class PostResponse(Post):
     id: str
@@ -90,15 +91,54 @@ class DirectMessage(BaseModel):
     content: str
     post_id: Optional[str] = None  # Link to a specific post
     post_link: Optional[str] = None  # Direct link to the post
+    reply_to: Optional[str] = None  # ID of message being replied to
 
 class DirectMessageResponse(DirectMessage):
     id: str
     from_user: str
     timestamp: datetime
     is_read: Optional[bool] = False
+    is_deleted: Optional[bool] = False
+    reply_content: Optional[str] = None  # Content of replied message
+    reply_author: Optional[str] = None   # Author of replied message
 
 class Conversation(BaseModel):
     participants: List[str]  # List of 2 usernames
     last_message: Optional[DirectMessageResponse] = None
     created_at: datetime
     updated_at: datetime
+
+class PostReport(BaseModel):
+    post_id: str
+    reason: str  # "spam", "inappropriate", "fake", "other"
+    description: Optional[str] = None  # Additional details
+    
+class PostReportResponse(PostReport):
+    id: str
+    reporter: str
+    created_at: datetime
+    status: str  # "pending", "reviewed", "resolved"
+
+class Comment(BaseModel):
+    post_id: str
+    content: str
+    
+class CommentResponse(Comment):
+    id: str
+    author: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+class Notification(BaseModel):
+    user_id: str  # recipient username
+    type: str  # "comment", "message", "system", "contact"
+    title: str
+    message: str
+    related_post_id: Optional[str] = None
+    related_user: Optional[str] = None  # username of the person who triggered notification
+    data: Optional[dict] = None  # additional data
+    
+class NotificationResponse(Notification):
+    id: str
+    created_at: datetime
+    is_read: Optional[bool] = False

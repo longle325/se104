@@ -292,9 +292,6 @@ const Dangtin = () => {
             <Heading size="xl" mb={2} color="blue.600">
               Đăng tin mới
             </Heading>
-            <Text color="gray.600">
-              Chia sẻ thông tin với cộng đồng sinh viên UIT
-            </Text>
           </Box>
 
           <Card w="full" bg={bg} shadow="lg">
