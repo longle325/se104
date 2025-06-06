@@ -27,13 +27,13 @@ import {
   Alert,
   AlertIcon
 } from "@chakra-ui/react";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FiPlus, FiSend, FiUpload, FiX, FiImage } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import Navigation from "../components/Navigation";
 
-const Dangtin = () => {
+const EditPost = () => {
   const [formData, setFormData] = useState({
     title: "",
     content: "",
@@ -50,9 +50,11 @@ const Dangtin = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewUrls, setPreviewUrls] = useState([]);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [loading, setLoading] = useState(true);
   const fileInputRef = useRef(null);
   const { getAuthHeader } = useAuth();
   const navigate = useNavigate();
+  const { postId } = useParams();
   const toast = useToast();
 
   const bg = useColorModeValue("white", "gray.800");
@@ -83,6 +85,59 @@ const Dangtin = () => {
     { value: "dien_tu", label: "Điện thoại/Tablet/Laptop" },
     { value: "khac", label: "Đồ vật khác" }
   ];
+
+  // Fetch post data
+  useEffect(() => {
+    const fetchPost = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/posts/${postId}`, {
+          headers: getAuthHeader(),
+        });
+
+        if (response.ok) {
+          const post = await response.json();
+          
+          // Find location code based on location name
+          const locationItem = locations.find(loc => loc.label === post.location);
+          const locationCode = locationItem ? locationItem.value : "khac";
+          
+          setFormData({
+            title: post.title || "",
+            content: post.content || "",
+            category: post.category || "",
+            item_type: post.item_type || "",
+            location: post.location || "",
+            location_code: locationCode,
+            custom_location: locationCode === "khac" ? post.location : "",
+            tags: post.tags || [],
+            image_urls: post.image_urls || []
+          });
+          
+          // Set preview URLs for existing images
+          if (post.image_urls && post.image_urls.length > 0) {
+            setPreviewUrls(post.image_urls.map(url => `http://localhost:8000${url}`));
+          }
+        } else {
+          throw new Error("Failed to fetch post");
+        }
+      } catch (error) {
+        toast({
+          title: "Lỗi",
+          description: "Không thể tải thông tin bài viết",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+        });
+        navigate("/homepage");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (postId) {
+      fetchPost();
+    }
+  }, [postId]);
 
   const handleInputChange = (field, value) => {
     if (field === "location") {
@@ -169,9 +224,19 @@ const Dangtin = () => {
 
   const removeImage = (index) => {
     // Revoke URL to prevent memory leaks
-    URL.revokeObjectURL(previewUrls[index]);
+    if (index < formData.image_urls.length) {
+      // Removing existing image
+      setFormData(prev => ({
+        ...prev,
+        image_urls: prev.image_urls.filter((_, i) => i !== index)
+      }));
+    } else {
+      // Removing new selected file
+      const newFileIndex = index - formData.image_urls.length;
+      URL.revokeObjectURL(previewUrls[index]);
+      setSelectedFiles(prev => prev.filter((_, i) => i !== newFileIndex));
+    }
     
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
     setPreviewUrls(prev => prev.filter((_, i) => i !== index));
   };
 
@@ -180,15 +245,15 @@ const Dangtin = () => {
 
     setUploadingImages(true);
     try {
-      const formData = new FormData();
+      const formDataUpload = new FormData();
       selectedFiles.forEach(file => {
-        formData.append('files', file);
+        formDataUpload.append('files', file);
       });
 
       const response = await fetch("http://localhost:8000/upload-images", {
         method: "POST",
         headers: getAuthHeader(),
-        body: formData,
+        body: formDataUpload,
       });
 
       if (response.ok) {
@@ -228,11 +293,14 @@ const Dangtin = () => {
     setIsLoading(true);
 
     try {
-      // Upload images first if any
-      let imageUrls = [];
+      // Upload new images if any
+      let newImageUrls = [];
       if (selectedFiles.length > 0) {
-        imageUrls = await uploadImages();
+        newImageUrls = await uploadImages();
       }
+
+      // Combine existing and new image URLs
+      const allImageUrls = [...formData.image_urls, ...newImageUrls];
 
       // Prepare post data with proper location handling
       const finalLocation = formData.location_code === "khac" && formData.custom_location 
@@ -240,17 +308,17 @@ const Dangtin = () => {
         : formData.location;
 
       const postData = {
-        ...formData,
+        title: formData.title,
+        content: formData.content,
+        category: formData.category,
+        item_type: formData.item_type,
         location: finalLocation,
-        image_urls: imageUrls
+        tags: formData.tags,
+        image_urls: allImageUrls
       };
 
-      // Remove location_code from final data as it's only for UI logic
-      delete postData.location_code;
-      delete postData.custom_location;
-
-      const response = await fetch("http://localhost:8000/posts", {
-        method: "POST",
+      const response = await fetch(`http://localhost:8000/posts/${postId}`, {
+        method: "PUT",
         headers: {
           "Content-Type": "application/json",
           ...getAuthHeader(),
@@ -261,7 +329,7 @@ const Dangtin = () => {
       if (response.ok) {
         toast({
           title: "Thành công",
-          description: "Bài viết đã được đăng thành công",
+          description: "Bài viết đã được cập nhật thành công",
           status: "success",
           duration: 3000,
           isClosable: true,
@@ -269,12 +337,12 @@ const Dangtin = () => {
         navigate("/homepage");
       } else {
         const error = await response.json();
-        throw new Error(error.detail || "Đăng bài thất bại");
+        throw new Error(error.detail || "Cập nhật bài thất bại");
       }
     } catch (error) {
       toast({
         title: "Lỗi",
-        description: error.message || "Có lỗi xảy ra khi đăng bài",
+        description: error.message || "Có lỗi xảy ra khi cập nhật bài",
         status: "error",
         duration: 3000,
         isClosable: true,
@@ -284,16 +352,26 @@ const Dangtin = () => {
     }
   };
 
+  if (loading) {
+    return (
+      <Navigation>
+        <Container maxW="4xl" py={6}>
+          <Text textAlign="center">Đang tải...</Text>
+        </Container>
+      </Navigation>
+    );
+  }
+
   return (
     <Navigation>
       <Container maxW="4xl" py={6}>
         <VStack spacing={6}>
           <Box textAlign="center">
             <Heading size="xl" mb={2} color="blue.600">
-              Đăng tin mới
+              Chỉnh sửa bài viết
             </Heading>
             <Text color="gray.600">
-              Chia sẻ thông tin với cộng đồng sinh viên UIT
+              Cập nhật thông tin bài viết của bạn
             </Text>
           </Box>
 
@@ -433,9 +511,9 @@ const Dangtin = () => {
                           onClick={() => fileInputRef.current?.click()}
                           colorScheme="blue"
                           variant="outline"
-                          isDisabled={selectedFiles.length >= 5}
+                          isDisabled={previewUrls.length >= 5}
                         >
-                          Chọn ảnh
+                          Thêm ảnh
                         </Button>
                         <Text fontSize="sm" color="gray.500">
                           Tối đa 5 ảnh, mỗi ảnh không quá 5MB
@@ -489,18 +567,28 @@ const Dangtin = () => {
 
                   <Divider />
 
-                  {/* Submit Button */}
-                  <Button
-                    type="submit"
-                    colorScheme="blue"
-                    size="lg"
-                    leftIcon={<FiSend />}
-                    isLoading={isLoading}
-                    loadingText="Đang đăng..."
-                    w="full"
-                  >
-                    Đăng tin
-                  </Button>
+                  {/* Action Buttons */}
+                  <HStack spacing={4} w="full">
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => navigate(-1)}
+                      flex={1}
+                    >
+                      Hủy
+                    </Button>
+                    <Button
+                      type="submit"
+                      colorScheme="blue"
+                      size="lg"
+                      leftIcon={<FiSend />}
+                      isLoading={isLoading}
+                      loadingText="Đang cập nhật..."
+                      flex={1}
+                    >
+                      Cập nhật bài viết
+                    </Button>
+                  </HStack>
                 </VStack>
               </form>
             </CardBody>
@@ -511,4 +599,4 @@ const Dangtin = () => {
   );
 };
 
-export default Dangtin; 
+export default EditPost; 

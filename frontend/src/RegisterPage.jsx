@@ -29,7 +29,7 @@ const RegisterPage = () => {
   const navigate = useNavigate();
   const toast = useToast();
   const [formData, setFormData] = useState({
-    full_name: "",
+    student_id: "",
     email: "",
     phonenumber: "",
     password: "",
@@ -37,6 +37,7 @@ const RegisterPage = () => {
   });
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
   const [generatedUsername, setGeneratedUsername] = useState("");
+  const [registeredFullName, setRegisteredFullName] = useState("");
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -49,9 +50,9 @@ const RegisterPage = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
   
-    const { full_name, email, phonenumber, password, confirmPassword } = formData;
+    const { student_id, email, phonenumber, password, confirmPassword } = formData;
   
-    if (!full_name || !email || !phonenumber || !password || !confirmPassword) {
+    if (!student_id || !email || !phonenumber || !password || !confirmPassword) {
       toast({
         title: "Incomplete Information",
         description: "Please fill in all fields.",
@@ -80,20 +81,21 @@ const RegisterPage = () => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ 
+          student_id,
           email, 
           phonenumber, 
-          password, 
-          full_name 
+          password
         })
       });
   
       if (response.ok) {
         const data = await response.json();
         setGeneratedUsername(data.username);
+        setRegisteredFullName(data.full_name);
         setRegistrationSuccess(true);
         toast({
           title: "Account Created!",
-          description: `Your username is ${data.username}. Please check your email to verify your account.`,
+          description: `Welcome ${data.full_name}! Your username is ${data.username}. Please check your email to verify your account.`,
           status: "success",
           duration: 5000,
           isClosable: true,
@@ -157,12 +159,6 @@ const RegisterPage = () => {
                 Verification Email Sent!
               </AlertTitle>
               <AlertDescription maxWidth="sm">
-                <Text mb={2}>
-                  Your username is: <Text as="span" fontWeight="bold" color="green.200">{generatedUsername}</Text>
-                </Text>
-                <Text mb={2} fontSize="sm" color="yellow.200">
-                  <Text as="span" fontWeight="bold">Ghi chú:</Text> Sử dụng username này để đăng nhập, không phải email.
-                </Text>
                 <Text>
                   We've sent a verification link to {formData.email}. 
                   Please check your email and click the link to activate your account.
@@ -211,10 +207,10 @@ const RegisterPage = () => {
                     <Image src={usernameIcon} alt="Full Name" w="25px" />
                   </InputLeftElement>
                   <Input
-                    name="full_name"
+                    name="student_id"
                     type="text"
-                    placeholder="FULL NAME"
-                    value={formData.full_name}
+                    placeholder="STUDENT ID (MSSV)"
+                    value={formData.student_id}
                     onChange={handleChange}
                     borderRadius="lg"
                     bg="rgba(255, 255, 255, 0.0)"
@@ -355,7 +351,7 @@ const RegisterPage = () => {
           </Text>
           
           <Text color="gray.300" fontSize="sm" textAlign="center" mt={2}>
-            Username sẽ được tự động tạo từ email và dùng để đăng nhập
+            Tên sẽ được tự động lấy từ MSSV, username tạo từ email và dùng để đăng nhập
           </Text>
         </Stack>
       </Box>

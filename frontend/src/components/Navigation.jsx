@@ -57,9 +57,9 @@ const Navigation = ({ children }) => {
           alt="UIT Logo" 
           w="60px" 
           h="60px"
-          mb={2}
+          mb={1}
         />
-        <Text fontSize="md" fontWeight="bold" color="blue.500">
+        <Text fontSize="sm" fontWeight="bold" color="blue.500" textAlign="center">
           UIT-W2F
         </Text>
       </Flex>

@@ -11,6 +11,7 @@ import Homepage from "./pages/Homepage";
 import ChatPage from "./pages/ChatPage";
 import Dangtin from "./pages/Dangtin";
 import ProfilePage from "./pages/ProfilePage";
+import EditPost from "./pages/EditPost";
 
 function App() {
   return (
@@ -63,6 +64,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ProfilePage />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/edit-post/:postId" 
+              element={
+                <ProtectedRoute>
+                  <EditPost />
                 </ProtectedRoute>
               } 
             />

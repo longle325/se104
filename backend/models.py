@@ -11,10 +11,11 @@ class User(BaseModel):
     is_active: Optional[bool] = False
 
 class UserRegistration(BaseModel):
+    student_id: str  # MSSV - Student ID
     email: str
     phonenumber: str
     password: str
-    full_name: Optional[str] = None
+    # full_name will be automatically mapped from student_id, so not needed in registration
 
 class Login(BaseModel):
     username: str  # Changed back to username for login
@@ -61,10 +62,12 @@ class Post(BaseModel):
     title: str
     content: str
     category: str  # "lost" (tìm đồ), "found" (nhặt được)
+    item_type: Optional[str] = None  # "the_sinh_vien", "vi_giay_to", "dien_tu", "khac"
     tags: Optional[List[str]] = []
     location: Optional[str] = None
+    custom_location: Optional[str] = None  # For when location is "khac"
     image_urls: Optional[List[str]] = []
-    contact_info: str
+    status: Optional[str] = "active"  # For lost: "found"/"not_found", For found: "returned"/"not_returned"
     
 class PostResponse(Post):
     id: str
@@ -72,10 +75,21 @@ class PostResponse(Post):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+class PostUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    item_type: Optional[str] = None
+    tags: Optional[List[str]] = None
+    location: Optional[str] = None
+    status: Optional[str] = None
+
 # Simplified chat models for direct messaging
 class DirectMessage(BaseModel):
     to_user: str  # username of recipient
     content: str
+    post_id: Optional[str] = None  # Link to a specific post
+    post_link: Optional[str] = None  # Direct link to the post
 
 class DirectMessageResponse(DirectMessage):
     id: str

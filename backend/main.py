@@ -7,6 +7,7 @@ import string
 import smtplib
 import json
 import shutil
+import pytz
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -28,7 +29,7 @@ from oauth import get_current_user, create_access_token
 from models import (
     User, UserRegistration, Login, Token, TokenData, EmailVerification, PasswordResetRequest, 
     VerificationCode, PasswordReset, UserProfile, Post, PostResponse, 
-    DirectMessage, DirectMessageResponse, Conversation
+    DirectMessage, DirectMessageResponse, Conversation, PostUpdate
 )
 
 # Load environment variables
@@ -36,7 +37,7 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "120"))
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "your_email@gmail.com")
@@ -44,6 +45,21 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "your_app_password")
 
 # Store verification codes temporarily (in production, use a database)
 verification_codes = {}
+
+# GMT+7 timezone (Vietnam)
+VN_TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
+
+def get_vietnam_time():
+    """Get current time in Vietnam timezone (GMT+7)"""
+    return datetime.now(VN_TIMEZONE)
+
+def get_utc_time():
+    """Get current UTC time (kept for compatibility)"""
+    return datetime.utcnow()
+
+def get_vietnam_time_naive():
+    """Get current time in Vietnam timezone without timezone info (for database storage)"""
+    return get_vietnam_time().replace(tzinfo=None)
 
 # WebSocket Connection Manager for Realtime Chat
 class ConnectionManager:
@@ -93,8 +109,8 @@ async def lifespan(app: FastAPI):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    expire = get_vietnam_time() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire.timestamp()})  # Use timestamp for JWT
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -119,23 +135,92 @@ def send_email(to_email: str, subject: str, html_content: str, background_tasks:
     background_tasks.add_task(_send_email_task, to_email, subject, html_content)
 
 def _send_email_task(to_email: str, subject: str, html_content: str):
+    """Background task to send email"""
     try:
+        gmail_user = EMAIL_USERNAME  # Use environment variable
+        gmail_password = EMAIL_PASSWORD  # Use environment variable
+        
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
-        message["From"] = EMAIL_USERNAME
+        message["From"] = gmail_user
         message["To"] = to_email
-
+        
+        # Add HTML content
         html_part = MIMEText(html_content, "html")
         message.attach(html_part)
-
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USERNAME, to_email, message.as_string())
+        
+        # Create SMTP session
+        server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)  # Use environment variables
+        server.starttls()  # Enable security
+        server.login(gmail_user, gmail_password)
+        text = message.as_string()
+        server.sendmail(gmail_user, to_email, text)
+        server.quit()
         print(f"Email sent successfully to {to_email}")
+        
     except Exception as e:
-        print(f"Failed to send email: {e}")
-        # In a production app, you might want to log this error or retry
+        print(f"Error sending email: {e}")
+
+def send_message_notification_email(to_email: str, sender_name: str, message_content: str, post_link: str = None, post_title: str = None):
+    """Send email notification when someone sends a message"""
+    try:
+        subject = f"UIT Lost & Found - Bạn có tin nhắn mới từ {sender_name}"
+        
+        # Create email content
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Tin nhắn mới</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                    <h2 style="color: #007bff; margin-bottom: 20px;">🔔 Bạn có tin nhắn mới!</h2>
+                    <p><strong>Người gửi:</strong> {sender_name}</p>
+                    <p><strong>Nội dung tin nhắn:</strong></p>
+                    <div style="background-color: white; padding: 15px; border-left: 4px solid #007bff; margin: 10px 0;">
+                        <p style="margin: 0;">{message_content}</p>
+                    </div>
+        """
+        
+        if post_link and post_title:
+            html_content += f"""
+                    <p><strong>Liên quan đến bài đăng:</strong></p>
+                    <div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                        <p style="margin: 0; font-weight: bold;">{post_title}</p>
+                        <a href="{post_link}" style="color: #007bff; text-decoration: none;">👉 Xem bài đăng</a>
+                    </div>
+            """
+        
+        html_content += f"""
+                </div>
+                
+                <div style="text-align: center; margin-top: 30px;">
+                    <a href="http://localhost:3000/chat" 
+                       style="background-color: #007bff; color: white; padding: 12px 30px; 
+                              text-decoration: none; border-radius: 5px; display: inline-block;">
+                        💬 Trả lời tin nhắn
+                    </a>
+                </div>
+                
+                <div style="margin-top: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 5px;">
+                    <p style="margin: 0; font-size: 14px; color: #666;">
+                        <strong>UIT Lost & Found</strong><br>
+                        Nền tảng kết nối sinh viên UIT - Tìm kiếm đồ vật thất lạc<br>
+                        <em>Email này được gửi tự động, vui lòng không trả lời.</em>
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        _send_email_task(to_email, subject, html_content)
+        
+    except Exception as e:
+        print(f"Error sending message notification email: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -206,8 +291,34 @@ def validate_phone(phone: str) -> bool:
 def read_root(current_user: User = Depends(get_current_user)):
     return {"data": "Hello World"}
 
+def load_student_mapping():
+    """Load student ID to name mapping from JSON file."""
+    try:
+        with open("student_mapping.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("student_mapping", {})
+    except FileNotFoundError:
+        print("Warning: student_mapping.json not found. Creating empty mapping.")
+        return {}
+    except json.JSONDecodeError:
+        print("Error: Invalid JSON in student_mapping.json")
+        return {}
+
 @app.post('/register')
 async def create_user(request: UserRegistration, background_tasks: BackgroundTasks):
+    # Load student mapping
+    student_mapping = load_student_mapping()
+    
+    # Check if student_id exists in mapping
+    if request.student_id not in student_mapping:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Student ID {request.student_id} not found in system. Please contact administrator."
+        )
+    
+    # Get full name from mapping
+    full_name = student_mapping[request.student_id]
+    
     # Check email and phone number
     if not validate_email(request.email):
         raise HTTPException(
@@ -229,6 +340,13 @@ async def create_user(request: UserRegistration, background_tasks: BackgroundTas
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already exists. Please use a different email address."
         )
+    
+    # Check if student_id already exists
+    if db["User"].find_one({"student_id": request.student_id}):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Student ID already registered. Please contact administrator if this is an error."
+        )
         
     hashed_pass = Hash.bcrypt(request.password)
     user_object = {
@@ -236,8 +354,9 @@ async def create_user(request: UserRegistration, background_tasks: BackgroundTas
         "email": request.email,
         "phonenumber": request.phonenumber,
         "password": hashed_pass,
-        "full_name": request.full_name,
-        "created_at": datetime.utcnow(),
+        "student_id": request.student_id,
+        "full_name": full_name,  # Automatically mapped from student_id
+        "created_at": get_vietnam_time_naive(),
         "is_active": False
     }
     
@@ -254,11 +373,12 @@ async def create_user(request: UserRegistration, background_tasks: BackgroundTas
     <html>
     <body>
         <h2>Welcome to UIT Where To Find!</h2>
-        <p>Hello {request.full_name or username},</p>
+        <p>Hello {full_name},</p>
         <p>Please click the link below to verify your email address:</p>
         <p><a href="{verification_link}">Verify Email</a></p>
         <p>This link will expire in 24 hours.</p>
         <p>Your username is: <strong>{username}</strong></p>
+        <p>Your student ID: <strong>{request.student_id}</strong></p>
     </body>
     </html>
     """
@@ -272,7 +392,8 @@ async def create_user(request: UserRegistration, background_tasks: BackgroundTas
     
     return {
         "message": "User created successfully. Please check your email to verify your account.",
-        "username": username
+        "username": username,
+        "full_name": full_name
     }
 
 @app.get('/verify-email', response_class=HTMLResponse)
@@ -356,7 +477,7 @@ async def forgot_password(request: PasswordResetRequest, background_tasks: Backg
     # Store verification code (in production, store in DB with expiration)
     verification_codes[request.email] = {
         "code": verification_code,
-        "expiry": datetime.utcnow() + timedelta(minutes=15)
+        "expiry": get_vietnam_time_naive() + timedelta(minutes=15)
     }
     
     # Send email with verification code
@@ -390,7 +511,7 @@ async def verify_reset_code(verification: VerificationCode):
     stored_verification = verification_codes[verification.email]
     
     # Check if code has expired
-    if datetime.utcnow() > stored_verification["expiry"]:
+    if get_vietnam_time_naive() > stored_verification["expiry"]:
         # Remove expired code
         del verification_codes[verification.email]
         raise HTTPException(
@@ -419,7 +540,7 @@ async def reset_password(reset_request: PasswordReset):
     stored_verification = verification_codes[reset_request.email]
     
     # Check if code has expired
-    if datetime.utcnow() > stored_verification["expiry"]:
+    if get_vietnam_time_naive() > stored_verification["expiry"]:
         # Remove expired code
         del verification_codes[reset_request.email]
         raise HTTPException(
@@ -509,13 +630,22 @@ def get_user_profile(username: str, current_user: User = Depends(get_current_use
     
     profile = db["UserProfile"].find_one({"username": username})
     if profile:
+        # If profile exists, merge with user data to ensure we have all basic info
         profile["_id"] = str(profile["_id"])
+        # Ensure basic user info is included
+        profile["username"] = user["username"]
+        profile["email"] = user["email"]
+        profile["full_name"] = user.get("full_name")  # Include full_name from User collection
+        profile["student_id"] = user.get("student_id")
+        profile["created_at"] = user.get("created_at")
         return profile
     else:
         # Return basic user info if no profile exists
         return {
             "username": user["username"],
             "email": user["email"],
+            "full_name": user.get("full_name"),  # Include full_name from User collection
+            "student_id": user.get("student_id"),
             "created_at": user.get("created_at")
         }
 
@@ -525,7 +655,7 @@ def update_user_profile(username: str, profile_data: UserProfile, current_user: 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only update your own profile")
     
     profile_dict = profile_data.dict(exclude_unset=True)
-    profile_dict["updated_at"] = datetime.utcnow()
+    profile_dict["updated_at"] = get_vietnam_time_naive()
     
     result = db["UserProfile"].update_one(
         {"username": username},
@@ -553,7 +683,7 @@ def get_posts(category: Optional[str] = None, limit: int = 20, skip: int = 0):
 def create_post(post_data: Post, current_user: User = Depends(get_current_user)):
     post_dict = post_data.dict()
     post_dict["author"] = current_user.username
-    post_dict["created_at"] = datetime.utcnow()
+    post_dict["created_at"] = get_vietnam_time_naive()
     
     result = db["Post"].insert_one(post_dict)
     post_dict["id"] = str(result.inserted_id)
@@ -575,7 +705,7 @@ def get_post(post_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
 @app.put("/posts/{post_id}")
-def update_post(post_id: str, post_data: Post, current_user: User = Depends(get_current_user)):
+def update_post(post_id: str, post_data: PostUpdate, current_user: User = Depends(get_current_user)):
     try:
         post = db["Post"].find_one({"_id": ObjectId(post_id)})
         if not post:
@@ -585,12 +715,46 @@ def update_post(post_id: str, post_data: Post, current_user: User = Depends(get_
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only edit your own posts")
         
         update_dict = post_data.dict(exclude_unset=True)
-        update_dict["updated_at"] = datetime.utcnow()
+        update_dict["updated_at"] = get_vietnam_time_naive()
         
         db["Post"].update_one({"_id": ObjectId(post_id)}, {"$set": update_dict})
         
         return {"message": "Post updated successfully"}
     except:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
+
+@app.put("/posts/{post_id}/status")
+def update_post_status(post_id: str, status_data: dict, current_user: User = Depends(get_current_user)):
+    try:
+        post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not post:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+        
+        if post["author"] != current_user.username:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only update your own posts")
+        
+        new_status = status_data.get("status")
+        if not new_status:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status is required")
+        
+        # Validate status based on category
+        valid_statuses = {
+            "lost": ["not_found", "found"],
+            "found": ["not_returned", "returned"]
+        }
+        
+        if new_status not in valid_statuses.get(post["category"], []):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status for this post category")
+        
+        db["Post"].update_one(
+            {"_id": ObjectId(post_id)}, 
+            {"$set": {"status": new_status, "updated_at": get_vietnam_time_naive()}}
+        )
+        
+        return {"message": "Post status updated successfully", "status": new_status}
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
 @app.delete("/posts/{post_id}")
@@ -617,20 +781,29 @@ def get_conversations(current_user: User = Depends(get_current_user)):
         {"participants": current_user.username}
     ).sort("updated_at", -1))
     
+    valid_conversations = []
     for conv in conversations:
         conv["id"] = str(conv["_id"])
         del conv["_id"]
         
-        # Get other participant info
-        other_participant = [p for p in conv["participants"] if p != current_user.username][0]
+        # Get other participant info - safety check for valid conversations
+        other_participants = [p for p in conv["participants"] if p != current_user.username]
+        if not other_participants:
+            # Skip conversations with no other participants
+            continue
+            
+        other_participant = other_participants[0]
         user_info = db["User"].find_one({"username": other_participant}, {"password": 0})
-        conv["other_user"] = {
-            "username": user_info["username"],
-            "full_name": user_info.get("full_name"),
-            "email": user_info["email"]
-        }
         
-    return conversations
+        if user_info:  # Only include if other user exists
+            conv["other_user"] = {
+                "username": user_info["username"],
+                "full_name": user_info.get("full_name"),
+                "email": user_info["email"]
+            }
+            valid_conversations.append(conv)
+        
+    return valid_conversations
 
 @app.get("/conversations/{other_username}/messages")
 def get_messages(other_username: str, limit: int = 50, skip: int = 0, current_user: User = Depends(get_current_user)):
@@ -653,7 +826,7 @@ def get_messages(other_username: str, limit: int = 50, skip: int = 0, current_us
     return messages[::-1]  # Return in chronological order
 
 @app.post("/conversations/{other_username}/messages")
-async def send_direct_message(other_username: str, message_data: DirectMessage, current_user: User = Depends(get_current_user)):
+async def send_direct_message(other_username: str, message_data: DirectMessage, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """Send a direct message to another user"""
     # Check if other user exists
     other_user = db["User"].find_one({"username": other_username})
@@ -667,8 +840,8 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
     if not conversation:
         conversation_data = {
             "participants": participants,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": get_vietnam_time_naive(),
+            "updated_at": get_vietnam_time_naive()
         }
         result = db["Conversation"].insert_one(conversation_data)
         conversation_id = str(result.inserted_id)
@@ -677,7 +850,7 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
         # Update conversation timestamp
         db["Conversation"].update_one(
             {"_id": conversation["_id"]},
-            {"$set": {"updated_at": datetime.utcnow()}}
+            {"$set": {"updated_at": get_vietnam_time_naive()}}
         )
     
     # Create message
@@ -686,13 +859,40 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
         "from_user": current_user.username,
         "to_user": other_username,
         "content": message_data.content,
-        "timestamp": datetime.utcnow(),
+        "timestamp": get_vietnam_time_naive(),
         "is_read": False
     }
+    
+    # Add post information if provided
+    if message_data.post_id:
+        message_dict["post_id"] = message_data.post_id
+        
+        # Get post information for the link
+        try:
+            post = db["Post"].find_one({"_id": ObjectId(message_data.post_id)})
+            if post:
+                message_dict["post_link"] = f"http://localhost:3000/posts/{message_data.post_id}"
+                message_dict["post_title"] = post.get("title", "")
+        except:
+            pass
     
     result = db["DirectMessage"].insert_one(message_dict)
     message_dict["id"] = str(result.inserted_id)
     del message_dict["_id"]
+    
+    # Get current user info from database for email
+    current_user_info = db["User"].find_one({"username": current_user.username})
+    sender_name = current_user_info.get("full_name", current_user.username) if current_user_info else current_user.username
+    
+    # Send email notification to recipient
+    background_tasks.add_task(
+        send_message_notification_email,
+        other_user["email"],
+        sender_name,
+        message_data.content,
+        message_dict.get("post_link"),
+        message_dict.get("post_title")
+    )
     
     # Send realtime notification to recipient if online
     await manager.broadcast_to_conversation({
@@ -702,12 +902,20 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
     
     return message_dict
 
+@app.post("/messages/send")
+async def send_message(message_data: DirectMessage, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
+    """Send a message to another user"""
+    return await send_direct_message(message_data.to_user, message_data, background_tasks, current_user)
+
 # WebSocket endpoint for realtime chat
 @app.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     # Verify user authentication through query parameter
     token = websocket.query_params.get("token")
+    print(f"WebSocket connection attempt for user: {username}")
+    
     if not token:
+        print(f"Missing token for user: {username}")
         await websocket.close(code=4001, reason="Missing authentication token")
         return
     
@@ -715,11 +923,34 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         # Verify JWT token
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         token_username: str = payload.get("sub")
+        print(f"Token decoded successfully. Token username: {token_username}, URL username: {username}")
+        
         if token_username != username:
+            print(f"Username mismatch. Token: {token_username}, URL: {username}")
             await websocket.close(code=4003, reason="Invalid token for user")
             return
-    except JWTError:
+            
+        # Verify user exists in database
+        user = db["User"].find_one({"username": username})
+        if not user:
+            print(f"User {username} not found in database")
+            await websocket.close(code=4004, reason="User not found")
+            return
+            
+        if not user.get("is_active", False):
+            print(f"User {username} is not active")
+            await websocket.close(code=4005, reason="User account not activated")
+            return
+            
+        print(f"User {username} verified successfully, connecting WebSocket")
+        
+    except JWTError as e:
+        print(f"JWT error for user {username}: {e}")
         await websocket.close(code=4001, reason="Invalid authentication token")
+        return
+    except Exception as e:
+        print(f"Unexpected error during WebSocket auth for user {username}: {e}")
+        await websocket.close(code=4002, reason="Authentication error")
         return
     
     # Connect user
@@ -752,8 +983,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                             if not conversation:
                                 conversation_data = {
                                     "participants": participants,
-                                    "created_at": datetime.utcnow(),
-                                    "updated_at": datetime.utcnow()
+                                    "created_at": get_vietnam_time_naive(),
+                                    "updated_at": get_vietnam_time_naive()
                                 }
                                 result = db["Conversation"].insert_one(conversation_data)
                                 conversation_id = str(result.inserted_id)
@@ -762,7 +993,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                                 # Update conversation timestamp
                                 db["Conversation"].update_one(
                                     {"_id": conversation["_id"]},
-                                    {"$set": {"updated_at": datetime.utcnow()}}
+                                    {"$set": {"updated_at": get_vietnam_time_naive()}}
                                 )
                             
                             # Create message
@@ -771,7 +1002,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                                 "from_user": username,
                                 "to_user": other_username,
                                 "content": content,
-                                "timestamp": datetime.utcnow(),
+                                "timestamp": get_vietnam_time_naive(),
                                 "is_read": False
                             }
                             
@@ -802,7 +1033,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 @app.get("/chat/online-users")
 def get_online_users(current_user: User = Depends(get_current_user)):
     """Get list of currently online users"""
-    return {"online_users": list(manager.active_connections.keys())}
+    return list(manager.active_connections.keys())
 
 # Mark messages as read
 @app.put("/conversations/{other_username}/read")
@@ -828,7 +1059,7 @@ def mark_messages_read(other_username: str, current_user: User = Depends(get_cur
 async def upload_images(files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
     try:
         uploaded_files = []
-        timestamp = int(datetime.utcnow().timestamp())
+        timestamp = int(get_vietnam_time_naive().timestamp())
         
         for file in files:
             # Generate unique filename
