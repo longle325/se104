@@ -142,3 +142,86 @@ class NotificationResponse(Notification):
     id: str
     created_at: datetime
     is_read: Optional[bool] = False
+
+# Admin models
+class AdminLogin(BaseModel):
+    username: str
+    password: str
+
+class UserBan(BaseModel):
+    username: str
+    reason: str
+    duration_days: Optional[int] = None  # None means permanent ban
+    
+class UserMute(BaseModel):
+    username: str
+    reason: str
+    duration_days: int
+
+class AdminDashboardStats(BaseModel):
+    total_users: int
+    active_users: int
+    banned_users: int
+    total_posts: int
+    total_reports: int
+    pending_reports: int
+    posts_today: int
+    users_today: int
+
+class AdminUserResponse(BaseModel):
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    student_id: Optional[str] = None
+    is_active: bool
+    is_banned: Optional[bool] = False
+    ban_reason: Optional[str] = None
+    ban_until: Optional[datetime] = None
+    is_muted: Optional[bool] = False
+    mute_reason: Optional[str] = None
+    mute_until: Optional[datetime] = None
+    created_at: datetime
+    last_login: Optional[datetime] = None
+    posts_count: int
+    reports_count: int  # Number of times this user has been reported
+
+class AdminPostResponse(BaseModel):
+    id: str
+    title: str
+    content: str
+    category: str
+    author: str
+    author_info: Optional[dict] = None
+    created_at: datetime
+    status: str
+    view_count: int
+    reports_count: int
+    image_urls: Optional[List[str]] = []
+    location: Optional[str] = None
+
+class AdminReportResponse(BaseModel):
+    id: str
+    post_id: str
+    post_title: str
+    reporter: str
+    reporter_info: Optional[dict] = None
+    reason: str
+    description: Optional[str] = None
+    created_at: datetime
+    status: str  # "pending", "reviewed", "resolved"
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    action_taken: Optional[str] = None  # "deleted", "warned", "ignored"
+
+class AdminActionLog(BaseModel):
+    id: str
+    admin_username: str
+    action: str  # "ban_user", "delete_post", "resolve_report", etc.
+    target_type: str  # "user", "post", "report"
+    target_id: str
+    reason: Optional[str] = None
+    created_at: datetime
+    
+class ReportAction(BaseModel):
+    action: str  # "resolve", "delete_post", "warn_user", "ignore"
+    reason: Optional[str] = None

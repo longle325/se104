@@ -16,6 +16,15 @@ import PostDetailPage from "./pages/PostDetailPage";
 import EditProfile from "./pages/EditProfile";
 import ChangePassword from "./pages/ChangePassword";
 
+// Admin components
+import AdminLoginPage from "./AdminLoginPage";
+import AdminDashboard from "./pages/AdminDashboard";
+import AdminUsers from "./pages/AdminUsers";
+import AdminPosts from "./pages/AdminPosts";
+import AdminReports from "./pages/AdminReports";
+import AdminAnalytics from "./pages/AdminAnalytics";
+import AdminSettings from "./pages/AdminSettings";
+
 function App() {
   return (
     <ChakraProvider>
@@ -102,6 +111,15 @@ function App() {
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Admin Routes */}
+            <Route path="/admin/login" element={<AdminLoginPage />} />
+            <Route path="/admin/dashboard" element={<AdminDashboard />} />
+            <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/posts" element={<AdminPosts />} />
+            <Route path="/admin/reports" element={<AdminReports />} />
+            <Route path="/admin/analytics" element={<AdminAnalytics />} />
+            <Route path="/admin/settings" element={<AdminSettings />} />
           </Routes>
         </Router>
       </AuthProvider>

@@ -25,11 +25,13 @@ from bson import ObjectId
 
 from db import db
 from hashing import Hash
-from oauth import get_current_user, create_access_token
+import oauth
+from oauth import get_current_user
 from models import (
     User, UserRegistration, Login, Token, TokenData, EmailVerification, PasswordResetRequest, 
     VerificationCode, PasswordReset, UserProfile, Post, PostResponse, 
-    DirectMessage, DirectMessageResponse, Conversation, PostUpdate, PostReport, PostReportResponse, Comment, CommentResponse, Notification, NotificationResponse
+    DirectMessage, DirectMessageResponse, Conversation, PostUpdate, PostReport, PostReportResponse, Comment, CommentResponse, Notification, NotificationResponse,
+    AdminLogin, UserBan, UserMute, AdminDashboardStats, AdminUserResponse, AdminPostResponse, AdminReportResponse, AdminActionLog, ReportAction
 )
 
 # Load environment variables
@@ -48,6 +50,11 @@ verification_codes = {}
 
 # GMT+7 timezone (Vietnam)
 VN_TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
+
+# Admin constants
+ADMIN_CREDENTIALS = {
+    "admin12": "123456"  # In production, use hashed passwords
+}
 
 def get_vietnam_time():
     """Get current time in Vietnam timezone (GMT+7)"""
@@ -1464,6 +1471,34 @@ def create_comment(post_id: str, comment_data: Comment, current_user: User = Dep
     except:
         raise HTTPException(status_code=400, detail="Invalid post ID")
     
+    # Check if user is banned or muted
+    user_info = db["User"].find_one({"username": current_user.username})
+    if user_info:
+        # Check if user is banned
+        if user_info.get("is_banned", False):
+            ban_until = user_info.get("ban_until")
+            if ban_until is None or ban_until > get_vietnam_time_naive():
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Tài khoản của bạn đã bị khóa và không thể bình luận"
+                )
+        
+        # Check if user is muted
+        if user_info.get("is_muted", False):
+            mute_until = user_info.get("mute_until")
+            if mute_until and mute_until > get_vietnam_time_naive():
+                remaining_days = (mute_until - get_vietnam_time_naive()).days + 1
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Bạn bị hạn chế bình luận trong {remaining_days} ngày nữa"
+                )
+            else:
+                # Mute period has expired, remove mute status
+                db["User"].update_one(
+                    {"username": current_user.username},
+                    {"$set": {"is_muted": False}, "$unset": {"mute_until": "", "mute_reason": ""}}
+                )
+    
     # Create comment
     comment_dict = {
         "post_id": post_id,
@@ -1682,21 +1717,635 @@ def mark_all_notifications_read(current_user: User = Depends(get_current_user)):
     return {"message": f"Marked {result.modified_count} notifications as read"}
 
 def create_notification(user_id: str, notification_type: str, title: str, message: str, related_post_id: str = None, related_user: str = None, data: dict = None):
-    """Helper function to create notifications"""
-    notification = {
-        "user_id": user_id,
-        "type": notification_type,
-        "title": title,
-        "message": message,
-        "related_post_id": related_post_id,
-        "related_user": related_user,
-        "data": data or {},
-        "created_at": get_vietnam_time_naive(),
-        "is_read": False
-    }
+    """Create a new notification for a user"""
+    try:
+        notification_data = {
+            "user_id": user_id,
+            "type": notification_type,
+            "title": title,
+            "message": message,
+            "related_post_id": related_post_id,
+            "related_user": related_user,
+            "data": data or {},
+            "created_at": get_vietnam_time_naive(),
+            "is_read": False
+        }
+        
+        result = db["Notification"].insert_one(notification_data)
+        
+        print(f"Created notification for user {user_id}: {title}")
+        return str(result.inserted_id)
+        
+    except Exception as e:
+        print(f"Error creating notification: {e}")
+        return None
+
+# Admin helper functions
+def verify_admin_credentials(username: str, password: str) -> bool:
+    """Verify admin credentials"""
+    return ADMIN_CREDENTIALS.get(username) == password
+
+def get_current_admin(token: str = Depends(oauth.oauth2_scheme)):
+    """Verify admin token and return admin info"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate admin credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     
-    result = db["Notification"].insert_one(notification)
-    notification["id"] = str(result.inserted_id)
-    del notification["_id"]
-    
-    return notification
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        is_admin: bool = payload.get("is_admin", False)
+        
+        if username is None or not is_admin:
+            raise credentials_exception
+            
+        # Verify admin still exists in our credentials
+        if username not in ADMIN_CREDENTIALS:
+            raise credentials_exception
+            
+        return {"username": username, "is_admin": True}
+        
+    except JWTError:
+        raise credentials_exception
+
+def log_admin_action(admin_username: str, action: str, target_type: str, target_id: str, reason: str = None):
+    """Log admin actions for audit trail"""
+    try:
+        log_data = {
+            "admin_username": admin_username,
+            "action": action,
+            "target_type": target_type,
+            "target_id": target_id,
+            "reason": reason,
+            "created_at": get_vietnam_time_naive()
+        }
+        
+        db["AdminActionLog"].insert_one(log_data)
+        print(f"Admin action logged: {admin_username} - {action} - {target_type}:{target_id}")
+        
+    except Exception as e:
+        print(f"Error logging admin action: {e}")
+
+# ===== ADMIN ENDPOINTS =====
+
+@app.post('/admin/login')
+def admin_login(request: AdminLogin):
+    """Admin login endpoint"""
+    try:
+        if not verify_admin_credentials(request.username, request.password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid admin credentials"
+            )
+        
+        # Create token with admin flag
+        access_token = create_access_token(
+            data={"sub": request.username, "is_admin": True}
+        )
+        
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Admin login error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get('/admin/dashboard/stats')
+def get_admin_dashboard_stats(current_admin: dict = Depends(get_current_admin)):
+    """Get dashboard statistics for admin"""
+    try:
+        # Get current date in Vietnam timezone
+        today = get_vietnam_time_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Count users
+        total_users = db["User"].count_documents({})
+        active_users = db["User"].count_documents({"is_active": True})
+        banned_users = db["User"].count_documents({"is_banned": True})
+        
+        # Count posts
+        total_posts = db["Post"].count_documents({})
+        posts_today = db["Post"].count_documents({
+            "created_at": {"$gte": today}
+        })
+        
+        # Count reports
+        total_reports = db["PostReport"].count_documents({})
+        pending_reports = db["PostReport"].count_documents({"status": "pending"})
+        
+        # Count new users today
+        users_today = db["User"].count_documents({
+            "created_at": {"$gte": today}
+        })
+        
+        return AdminDashboardStats(
+            total_users=total_users,
+            active_users=active_users,
+            banned_users=banned_users,
+            total_posts=total_posts,
+            total_reports=total_reports,
+            pending_reports=pending_reports,
+            posts_today=posts_today,
+            users_today=users_today
+        )
+        
+    except Exception as e:
+        print(f"Error getting dashboard stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dashboard statistics")
+
+@app.get('/admin/users')
+def get_admin_users(
+    limit: int = 50, 
+    skip: int = 0,
+    search: Optional[str] = None,
+    filter_type: Optional[str] = None,  # "all", "active", "banned", "muted"
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Get users list for admin with filters"""
+    try:
+        # Build query
+        query = {}
+        
+        if search:
+            query["$or"] = [
+                {"username": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+                {"full_name": {"$regex": search, "$options": "i"}},
+                {"student_id": {"$regex": search, "$options": "i"}}
+            ]
+        
+        if filter_type == "active":
+            query["is_active"] = True
+            query["is_banned"] = {"$ne": True}
+        elif filter_type == "banned":
+            query["is_banned"] = True
+        elif filter_type == "muted":
+            query["is_muted"] = True
+        
+        # Get users
+        users_cursor = db["User"].find(query).skip(skip).limit(limit).sort("created_at", -1)
+        users = []
+        
+        for user in users_cursor:
+            # Count posts for this user
+            posts_count = db["Post"].count_documents({"author": user["username"]})
+            
+            # Count reports against this user's posts
+            user_posts = db["Post"].find({"author": user["username"]})
+            post_ids = [str(post["_id"]) for post in user_posts]
+            reports_count = db["PostReport"].count_documents({"post_id": {"$in": post_ids}})
+            
+            user_data = AdminUserResponse(
+                username=user["username"],
+                email=user["email"],
+                full_name=user.get("full_name"),
+                student_id=user.get("student_id"),
+                is_active=user.get("is_active", False),
+                is_banned=user.get("is_banned", False),
+                ban_reason=user.get("ban_reason"),
+                ban_until=user.get("ban_until"),
+                is_muted=user.get("is_muted", False),
+                mute_reason=user.get("mute_reason"),
+                mute_until=user.get("mute_until"),
+                created_at=user.get("created_at", get_vietnam_time_naive()),
+                last_login=user.get("last_login"),
+                posts_count=posts_count,
+                reports_count=reports_count
+            )
+            users.append(user_data)
+        
+        return {
+            "users": users,
+            "total": db["User"].count_documents(query),
+            "has_more": len(users) == limit
+        }
+        
+    except Exception as e:
+        print(f"Error getting admin users: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get users")
+
+@app.post('/admin/users/{username}/ban')
+def ban_user(
+    username: str, 
+    ban_data: UserBan,
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Ban a user"""
+    try:
+        user = db["User"].find_one({"username": username})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Calculate ban until date
+        ban_until = None
+        if ban_data.duration_days:
+            ban_until = get_vietnam_time_naive() + timedelta(days=ban_data.duration_days)
+        
+        # Update user
+        db["User"].update_one(
+            {"username": username},
+            {
+                "$set": {
+                    "is_banned": True,
+                    "ban_reason": ban_data.reason,
+                    "ban_until": ban_until,
+                    "banned_at": get_vietnam_time_naive(),
+                    "banned_by": current_admin["username"]
+                }
+            }
+        )
+        
+        # Log action
+        log_admin_action(
+            current_admin["username"], 
+            "ban_user", 
+            "user", 
+            username, 
+            ban_data.reason
+        )
+        
+        # Send notification to user
+        create_notification(
+            username,
+            "system",
+            "Tài khoản bị khóa",
+            f"Tài khoản của bạn đã bị khóa. Lý do: {ban_data.reason}"
+        )
+        
+        return {"message": "User banned successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error banning user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to ban user")
+
+@app.post('/admin/users/{username}/unban')
+def unban_user(username: str, current_admin: dict = Depends(get_current_admin)):
+    """Unban a user"""
+    try:
+        user = db["User"].find_one({"username": username})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Update user
+        db["User"].update_one(
+            {"username": username},
+            {
+                "$set": {
+                    "is_banned": False,
+                    "unbanned_at": get_vietnam_time_naive(),
+                    "unbanned_by": current_admin["username"]
+                },
+                "$unset": {
+                    "ban_reason": "",
+                    "ban_until": ""
+                }
+            }
+        )
+        
+        # Log action
+        log_admin_action(current_admin["username"], "unban_user", "user", username)
+        
+        # Send notification to user
+        create_notification(
+            username,
+            "system",
+            "Tài khoản được khôi phục",
+            "Tài khoản của bạn đã được khôi phục và có thể sử dụng bình thường."
+        )
+        
+        return {"message": "User unbanned successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error unbanning user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unban user")
+
+@app.post('/admin/users/{username}/mute')
+def mute_user(
+    username: str, 
+    mute_data: UserMute,
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Mute a user (restrict commenting)"""
+    try:
+        user = db["User"].find_one({"username": username})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Calculate mute until date
+        mute_until = get_vietnam_time_naive() + timedelta(days=mute_data.duration_days)
+        
+        # Update user
+        db["User"].update_one(
+            {"username": username},
+            {
+                "$set": {
+                    "is_muted": True,
+                    "mute_reason": mute_data.reason,
+                    "mute_until": mute_until,
+                    "muted_at": get_vietnam_time_naive(),
+                    "muted_by": current_admin["username"]
+                }
+            }
+        )
+        
+        # Log action
+        log_admin_action(
+            current_admin["username"], 
+            "mute_user", 
+            "user", 
+            username, 
+            mute_data.reason
+        )
+        
+        # Send notification to user
+        create_notification(
+            username,
+            "system",
+            "Bị hạn chế bình luận",
+            f"Bạn bị hạn chế bình luận trong {mute_data.duration_days} ngày. Lý do: {mute_data.reason}"
+        )
+        
+        return {"message": "User muted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error muting user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to mute user")
+
+@app.get('/admin/posts')
+def get_admin_posts(
+    limit: int = 50,
+    skip: int = 0,
+    search: Optional[str] = None,
+    category: Optional[str] = None,
+    author: Optional[str] = None,
+    has_reports: Optional[bool] = None,
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Get posts list for admin"""
+    try:
+        print(f"Admin posts request: limit={limit}, skip={skip}, search={search}, category={category}")
+        print(f"Current admin: {current_admin}")
+        
+        # Test database connection
+        if db is None:
+            print("ERROR: Database connection is None")
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        # Build query
+        query = {}
+        
+        if search:
+            query["$or"] = [
+                {"title": {"$regex": search, "$options": "i"}},
+                {"content": {"$regex": search, "$options": "i"}}
+            ]
+        
+        if category:
+            query["category"] = category
+            
+        if author:
+            query["author"] = author
+        
+        # Get posts
+        print(f"Executing query: {query}")
+        posts_cursor = db["Post"].find(query).skip(skip).limit(limit).sort("created_at", -1)
+        posts = []
+        
+        print("Processing posts...")
+        for post in posts_cursor:
+            print(f"Processing post: {post.get('_id', 'NO_ID')}")
+            # Bỏ qua post thiếu trường bắt buộc
+            if "title" not in post or "content" not in post or "category" not in post or "author" not in post:
+                print(f"Skip invalid post: {post}")
+                continue
+            reports_count = db["PostReport"].count_documents({"post_id": str(post["_id"])})
+            try:
+                author_info = db["User"].find_one({"username": post["author"]})
+                print(f"Author info for {post['author']}: {author_info is not None}")
+            except Exception as e:
+                print(f"Error getting author info: {e}")
+                author_info = None
+            try:
+                post_data = {
+                    "id": str(post["_id"]),
+                    "title": post["title"],
+                    "content": post["content"],
+                    "category": post["category"],
+                    "author": post["author"],
+                    "author_info": {
+                        "full_name": author_info.get("full_name") if author_info else None,
+                        "email": author_info.get("email") if author_info else None
+                    },
+                    "created_at": post["created_at"].isoformat() if post.get("created_at") else None,
+                    "status": post.get("status", "active"),
+                    "view_count": post.get("view_count", 0),
+                    "reports_count": reports_count,
+                    "image_urls": post.get("image_urls", []),
+                    "location": post.get("location")
+                }
+                print(f"Created post_data successfully for {post['_id']}")
+                posts.append(post_data)
+            except Exception as e:
+                print(f"Error creating post_data: {e}")
+                print(f"Post data: {post}")
+                raise e
+        
+        print(f"Successfully processed {len(posts)} posts")
+        total_count = db["Post"].count_documents(query)
+        print(f"Total posts in DB: {total_count}")
+        
+        return {
+            "posts": posts,
+            "total": total_count,
+            "has_more": len(posts) == limit
+        }
+        
+    except Exception as e:
+        print(f"Error getting admin posts: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to get posts: {str(e)}")
+
+@app.delete('/admin/posts/{post_id}')
+def admin_delete_post(
+    post_id: str,
+    reason: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Admin delete any post"""
+    try:
+        post = db["Post"].find_one({"_id": ObjectId(post_id)})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        # Delete post
+        db["Post"].delete_one({"_id": ObjectId(post_id)})
+        
+        # Delete related comments
+        db["Comment"].delete_many({"post_id": post_id})
+        
+        # Delete related reports
+        db["PostReport"].delete_many({"post_id": post_id})
+        
+        # Log action
+        log_admin_action(
+            current_admin["username"], 
+            "delete_post", 
+            "post", 
+            post_id, 
+            reason or "Admin deletion"
+        )
+        
+        # Send notification to post author
+        create_notification(
+            post["author"],
+            "system",
+            "Bài viết bị xóa",
+            f"Bài viết '{post['title']}' của bạn đã bị xóa bởi quản trị viên. {f'Lý do: {reason}' if reason else ''}"
+        )
+        
+        return {"message": "Post deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting post: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete post")
+
+@app.get('/admin/reports')
+def get_admin_reports(
+    limit: int = 50,
+    skip: int = 0,
+    status_filter: Optional[str] = None,  # "pending", "reviewed", "resolved"
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Get reports list for admin"""
+    try:
+        # Build query
+        query = {}
+        if status_filter:
+            query["status"] = status_filter
+        
+        # Get reports
+        reports_cursor = db["PostReport"].find(query).skip(skip).limit(limit).sort("created_at", -1)
+        reports = []
+        
+        for report in reports_cursor:
+            # Get post info
+            post = db["Post"].find_one({"_id": ObjectId(report["post_id"])})
+            if not post:
+                continue  # Skip if post was deleted
+            
+            # Get reporter info
+            reporter_info = db["User"].find_one({"username": report["reporter"]})
+            
+            report_data = AdminReportResponse(
+                id=str(report["_id"]),
+                post_id=report["post_id"],
+                post_title=post["title"],
+                reporter=report["reporter"],
+                reporter_info={
+                    "full_name": reporter_info.get("full_name") if reporter_info else None,
+                    "email": reporter_info.get("email") if reporter_info else None
+                },
+                reason=report["reason"],
+                description=report.get("description"),
+                created_at=report["created_at"],
+                status=report["status"],
+                reviewed_by=report.get("reviewed_by"),
+                reviewed_at=report.get("reviewed_at"),
+                action_taken=report.get("action_taken")
+            )
+            reports.append(report_data)
+        
+        return {
+            "reports": reports,
+            "total": db["PostReport"].count_documents(query),
+            "has_more": len(reports) == limit
+        }
+        
+    except Exception as e:
+        print(f"Error getting admin reports: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get reports")
+
+@app.post('/admin/reports/{report_id}/action')
+def handle_report_action(
+    report_id: str,
+    action_data: ReportAction,
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Handle admin action on a report"""
+    try:
+        report = db["PostReport"].find_one({"_id": ObjectId(report_id)})
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        # Get post
+        post = db["Post"].find_one({"_id": ObjectId(report["post_id"])})
+        if not post and action_data.action != "ignore":
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        # Handle different actions
+        if action_data.action == "delete_post":
+            # Delete the post
+            db["Post"].delete_one({"_id": ObjectId(report["post_id"])})
+            db["Comment"].delete_many({"post_id": report["post_id"]})
+            
+            # Notify post author
+            create_notification(
+                post["author"],
+                "system",
+                "Bài viết bị xóa",
+                f"Bài viết '{post['title']}' của bạn đã bị xóa do vi phạm quy định. {f'Lý do: {action_data.reason}' if action_data.reason else ''}"
+            )
+            
+        elif action_data.action == "warn_user":
+            # Send warning to post author
+            create_notification(
+                post["author"],
+                "system",
+                "Cảnh báo vi phạm",
+                f"Bài viết '{post['title']}' của bạn đã được báo cáo và nhận cảnh báo. {f'Lý do: {action_data.reason}' if action_data.reason else ''}"
+            )
+        
+        # Update report status
+        db["PostReport"].update_one(
+            {"_id": ObjectId(report_id)},
+            {
+                "$set": {
+                    "status": "resolved",
+                    "reviewed_by": current_admin["username"],
+                    "reviewed_at": get_vietnam_time_naive(),
+                    "action_taken": action_data.action,
+                    "action_reason": action_data.reason
+                }
+            }
+        )
+        
+        # Log action
+        log_admin_action(
+            current_admin["username"], 
+            f"report_{action_data.action}", 
+            "report", 
+            report_id, 
+            action_data.reason
+        )
+        
+        return {"message": f"Report {action_data.action} successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error handling report action: {e}")
+        raise HTTPException(status_code=500, detail="Failed to handle report action")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
