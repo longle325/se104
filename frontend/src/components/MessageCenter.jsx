@@ -129,6 +129,12 @@ const MessageCenter = () => {
     
     try {
       const date = new Date(timestamp);
+      
+      // Kiểm tra nếu date không hợp lệ
+      if (isNaN(date.getTime())) {
+        return '';
+      }
+      
       const now = new Date();
       const diffTime = now - date;
       const diffMinutes = Math.floor(diffTime / (1000 * 60));
@@ -143,7 +149,8 @@ const MessageCenter = () => {
       
       return date.toLocaleDateString('vi-VN');
     } catch (error) {
-      return timestamp;
+      console.error('Error formatting timestamp:', timestamp, error);
+      return '';
     }
   };
 

@@ -57,7 +57,8 @@ import {
   FiSend,
   FiTrash2,
   FiThumbsUp,
-  FiEye
+  FiEye,
+  FiCornerDownRight
 } from 'react-icons/fi';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
@@ -79,6 +80,13 @@ const PostDetailPage = () => {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [reportData, setReportData] = useState({ reason: '', description: '' });
   const [submittingReport, setSubmittingReport] = useState(false);
+
+  const [replyTo, setReplyTo] = useState(null);
+  const [replyContent, setReplyContent] = useState("");
+  const [isReportCommentOpen, setIsReportCommentOpen] = useState(false);
+  const [reportingComment, setReportingComment] = useState(null);
+  const [reportCommentData, setReportCommentData] = useState({ reason: '', description: '' });
+  const [submittingCommentReport, setSubmittingCommentReport] = useState(false);
 
   const bg = useColorModeValue('gray.50', 'gray.900');
   const cardBg = useColorModeValue('white', 'gray.800');
@@ -145,8 +153,6 @@ const PostDetailPage = () => {
       setCommentsLoading(false);
     }
   };
-
-
 
   const handleSubmitComment = async () => {
     if (!newComment.trim() || !user) return;
@@ -395,6 +401,60 @@ const PostDetailPage = () => {
     }
   };
 
+  const handleReplyComment = async (parentId) => {
+    if (!replyContent.trim() || !user) return;
+    try {
+      setSubmittingComment(true);
+      const response = await fetch(`http://localhost:8000/posts/${postId}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify({
+          content: replyContent.trim(),
+          parent_id: parentId
+        }),
+      });
+      if (response.ok) {
+        const newCommentData = await response.json();
+        setComments(prev => [newCommentData, ...prev]);
+        setReplyTo(null);
+        setReplyContent("");
+      }
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleOpenReportComment = (comment) => {
+    setReportingComment(comment);
+    setIsReportCommentOpen(true);
+  };
+
+  const handleSubmitReportComment = async () => {
+    if (!reportCommentData.reason || !reportingComment) return;
+    try {
+      setSubmittingCommentReport(true);
+      const response = await fetch(`http://localhost:8000/comments/${reportingComment.id}/report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify(reportCommentData),
+      });
+      if (response.ok) {
+        toast({ title: 'Đã gửi báo cáo', status: 'success', duration: 3000, isClosable: true });
+        setIsReportCommentOpen(false);
+        setReportCommentData({ reason: '', description: '' });
+        setReportingComment(null);
+      }
+    } finally {
+      setSubmittingCommentReport(false);
+    }
+  };
+
   if (loading) {
     return (
       <Navigation>
@@ -619,8 +679,6 @@ const PostDetailPage = () => {
               </CardBody>
             </Card>
 
-
-
             {/* Comments Section */}
             <Card bg={cardBg} shadow="md" borderRadius="lg" mt={6}>
               <CardBody p={6}>
@@ -689,20 +747,37 @@ const PostDetailPage = () => {
                               </Text>
                             </VStack>
                           </HStack>
-                          
-                          {(user?.username === comment.author || user?.username === 'admin') && (
-                            <IconButton
-                              icon={<FiTrash2 />}
-                              size="sm"
-                              variant="ghost"
-                              colorScheme="red"
-                              onClick={() => handleDeleteComment(comment.id)}
-                            />
-                          )}
+                          <HStack>
+                            <Button size="xs" leftIcon={<FiCornerDownRight />} variant="ghost" colorScheme="blue" onClick={() => { setReplyTo(comment); setReplyContent(""); }}>Trả lời</Button>
+                            <Button size="xs" leftIcon={<FiFlag />} variant="ghost" colorScheme="red" onClick={() => handleOpenReportComment(comment)}>Báo cáo</Button>
+                            {(user?.username === comment.author || user?.username === 'admin') && (
+                              <IconButton
+                                icon={<FiTrash2 />}
+                                size="sm"
+                                variant="ghost"
+                                colorScheme="red"
+                                onClick={() => handleDeleteComment(comment.id)}
+                              />
+                            )}
+                          </HStack>
                         </HStack>
                         <Text ml={10} color="gray.700" fontSize="sm">
                           {comment.content}
                         </Text>
+                        {replyTo?.id === comment.id && (
+                          <Box mt={2} ml={10}>
+                            <Textarea
+                              placeholder="Nhập phản hồi..."
+                              value={replyContent}
+                              onChange={e => setReplyContent(e.target.value)}
+                              minH="60px"
+                            />
+                            <HStack mt={2} justify="flex-end">
+                              <Button size="sm" onClick={() => setReplyTo(null)} variant="ghost">Hủy</Button>
+                              <Button size="sm" colorScheme="blue" isLoading={submittingComment} onClick={() => handleReplyComment(comment.id)} disabled={!replyContent.trim()}>Gửi phản hồi</Button>
+                            </HStack>
+                          </Box>
+                        )}
                       </Box>
                     ))}
                   </VStack>
@@ -767,6 +842,43 @@ const PostDetailPage = () => {
               >
                 Gửi báo cáo
               </Button>
+            </ModalFooter>
+          </ModalContent>
+        </Modal>
+
+        {/* Report Comment Modal */}
+        <Modal isOpen={isReportCommentOpen} onClose={() => setIsReportCommentOpen(false)}>
+          <ModalOverlay />
+          <ModalContent>
+            <ModalHeader>Báo cáo bình luận</ModalHeader>
+            <ModalCloseButton />
+            <ModalBody>
+              <VStack spacing={4}>
+                <FormControl>
+                  <FormLabel>Lý do báo cáo</FormLabel>
+                  <Select
+                    value={reportCommentData.reason}
+                    onChange={e => setReportCommentData(prev => ({ ...prev, reason: e.target.value }))}
+                  >
+                    <option value="">Chọn lý do</option>
+                    {reportReasons.map((reason) => (
+                      <option key={reason.value} value={reason.value}>{reason.label}</option>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Mô tả chi tiết</FormLabel>
+                  <Textarea
+                    placeholder="Mô tả chi tiết về vấn đề..."
+                    value={reportCommentData.description}
+                    onChange={e => setReportCommentData(prev => ({ ...prev, description: e.target.value }))}
+                  />
+                </FormControl>
+              </VStack>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="ghost" mr={3} onClick={() => setIsReportCommentOpen(false)}>Hủy</Button>
+              <Button colorScheme="red" onClick={handleSubmitReportComment} isLoading={submittingCommentReport} disabled={!reportCommentData.reason}>Gửi báo cáo</Button>
             </ModalFooter>
           </ModalContent>
         </Modal>

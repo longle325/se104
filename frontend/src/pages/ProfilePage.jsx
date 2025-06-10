@@ -291,7 +291,7 @@ const ProfilePage = () => {
                   <Avatar 
                     size="2xl" 
                     name={profile?.full_name || profile?.username || "User"}
-                    src={profile?.avatar_url}
+                    src={isOwnProfile ? (user?.avatar_url || undefined) : (profile?.avatar_url || undefined)}
                   />
                   <VStack spacing={1}>
                     <Heading size="lg">

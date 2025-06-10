@@ -42,7 +42,7 @@ const EditProfile = () => {
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState(null);
   
-  const { user, getAuthHeader } = useAuth();
+  const { user, getAuthHeader, loadUserProfile, token } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -142,11 +142,13 @@ const EditProfile = () => {
           duration: 3000,
           isClosable: true,
         });
-        
+        // Đồng bộ lại user context để avatar mới cập nhật ở mọi nơi
+        if (user && token) {
+          await loadUserProfile(user.username, token);
+        }
         // Clear avatar file and preview after successful save
         setAvatarFile(null);
         setAvatarPreview(null);
-        
         navigate(`/profile/${user?.username}`);
       } else {
         throw new Error('Failed to update profile');

@@ -153,6 +153,12 @@ const NotificationCenter = () => {
     
     try {
       const date = new Date(timestamp);
+      
+      // Kiểm tra nếu date không hợp lệ
+      if (isNaN(date.getTime())) {
+        return 'Thời gian không xác định';
+      }
+      
       const now = new Date();
       const diffTime = now - date;
       const diffMinutes = Math.floor(diffTime / (1000 * 60));
@@ -167,7 +173,8 @@ const NotificationCenter = () => {
       
       return date.toLocaleDateString('vi-VN');
     } catch (error) {
-      return timestamp;
+      console.error('Error formatting timestamp:', timestamp, error);
+      return 'Thời gian không xác định';
     }
   };
 

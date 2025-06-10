@@ -45,7 +45,8 @@ import {
   Textarea,
   Avatar,
   Skeleton,
-  SkeletonText
+  SkeletonText,
+  Spinner
 } from "@chakra-ui/react";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
@@ -80,6 +81,7 @@ const Homepage = () => {
   const { isOpen: isReportOpen, onOpen: onReportOpen, onClose: onReportClose } = useDisclosure();
   const [reportData, setReportData] = useState({ reason: '', description: '' });
   const [submittingReport, setSubmittingReport] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   const bg = useColorModeValue("gray.50", "gray.800");
   const cardBg = useColorModeValue("white", "gray.700");
@@ -150,10 +152,11 @@ const Homepage = () => {
 
   // Debounce search term
   useEffect(() => {
+    setIsSearching(true);
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
+      setIsSearching(false);
     }, 300);
-    
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
@@ -267,9 +270,9 @@ const Homepage = () => {
 
   const filteredPosts = posts.filter(post => {
     // Text search
-    const matchesSearch = !debouncedSearchTerm || 
-      post.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
-      post.content.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+    const matchesSearch = !debouncedSearchTerm ||
+      (post.title && post.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+      (post.content && post.content.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
       (post.location && post.location.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
 
     // Time filter
@@ -451,7 +454,11 @@ const Homepage = () => {
           'Content-Type': 'application/json',
           ...getAuthHeader(),
         },
-        body: JSON.stringify(reportData),
+        body: JSON.stringify({
+          post_id: selectedPost.id,
+          reason: reportData.reason,
+          description: reportData.description || ""
+        }),
       });
 
       if (response.ok) {
@@ -464,12 +471,23 @@ const Homepage = () => {
         });
         onReportClose();
         setReportData({ reason: '', description: '' });
-      } else if (response.status === 400) {
+      } else {
         const errorData = await response.json();
+        let errorMessage = "Không thể gửi báo cáo";
+        
+        if (errorData.detail) {
+          if (Array.isArray(errorData.detail)) {
+            // FastAPI validation error format
+            errorMessage = errorData.detail.map(err => err.msg).join(", ");
+          } else if (typeof errorData.detail === 'string') {
+            errorMessage = errorData.detail;
+          }
+        }
+        
         toast({
           title: "Lỗi",
-          description: errorData.detail || "Không thể gửi báo cáo",
-          status: "error", 
+          description: errorMessage,
+          status: "error",
           duration: 3000,
           isClosable: true,
         });
@@ -528,8 +546,6 @@ const Homepage = () => {
               Nền tảng kết nối tìm kiếm đồ vật thất lạc cho sinh viên trường ĐH CNTT
             </Text>
           </VStack>
-
-
 
           {/* Search and Actions */}
           <HStack spacing={4} w="full" maxW="4xl">
@@ -694,30 +710,18 @@ const Homepage = () => {
             </Box>
           </Collapse>
 
-
         </VStack>
 
         {/* Posts Grid - 4 columns with larger thumbnails */}
-        {loading ? (
-          <SimpleGrid columns={{ base: 2, md: 3, lg: 4 }} spacing={4}>
-            {Array.from({ length: 8 }).map((_, index) => (
-              <Card key={index} bg={cardBg} border="1px solid" borderColor={borderColor} h="380px">
-                <CardBody p={4}>
-                  <Skeleton height="160px" borderRadius="md" mb={3} />
-                  <SkeletonText mt={2} noOfLines={2} spacing={2} />
-                  <Skeleton height="20px" width="60%" mt={3} />
-                  <SkeletonText mt={3} noOfLines={1} spacing={2} />
-                  <HStack mt={4} justify="space-between">
-                    <Skeleton height="32px" width="60px" />
-                    <HStack spacing={2}>
-                      <Skeleton height="32px" width="32px" />
-                      <Skeleton height="32px" width="32px" />
-                    </HStack>
-                  </HStack>
-                </CardBody>
-              </Card>
-            ))}
-          </SimpleGrid>
+        {isSearching ? (
+          <Center py={10}>
+            <Spinner size="lg" color="blue.500" />
+            <Text ml={3}>Đang tìm kiếm...</Text>
+          </Center>
+        ) : filteredPosts.length === 0 ? (
+          <Center py={10}>
+            <Text fontSize="lg" color="gray.500">Không tìm thấy kết quả</Text>
+          </Center>
         ) : (
           <SimpleGrid columns={{ base: 2, md: 3, lg: 4 }} spacing={4}>
             {currentPosts.map((post, index) => (
@@ -1003,20 +1007,6 @@ const Homepage = () => {
           </Center>
         )}
 
-        {filteredPosts.length === 0 && !loading && (
-          <Center py={20}>
-            <VStack spacing={4}>
-              <Icon as={FiSearch} size={50} color="gray.300" />
-              <Text fontSize="lg" color="gray.500">
-                Không tìm thấy bài viết nào
-              </Text>
-              <Text color="gray.400" textAlign="center">
-                Thử tìm kiếm với từ khóa khác hoặc thay đổi bộ lọc
-              </Text>
-            </VStack>
-          </Center>
-        )}
-
         {/* Post Detail Modal */}
         <Modal isOpen={isOpen} onClose={onClose} size="2xl">
           <ModalOverlay />
@@ -1269,6 +1259,7 @@ const Homepage = () => {
                 colorScheme="red"
                 onClick={handleSubmitReport}
                 isLoading={submittingReport}
+                disabled={!reportData.reason}
               >
                 Gửi báo cáo
               </Button>
