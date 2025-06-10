@@ -192,7 +192,7 @@ const ChatPage = () => {
     if (selectedUser && conversations.length > 0) {
       const conversation = conversations.find(conv => 
         conv.other_user?.username === selectedUser || 
-        conv.participants?.includes(selectedUser)
+        (Array.isArray(conv.participants) && conv.participants.includes(selectedUser))
       );
       
       if (conversation?.other_user) {
@@ -427,7 +427,7 @@ const ChatPage = () => {
     
     const conversation = conversations.find(conv => 
       conv.other_user?.username === username || 
-      conv.participants?.includes(username)
+      (Array.isArray(conv.participants) && conv.participants.includes(username))
     );
     
     if (conversation?.other_user) {
@@ -772,7 +772,7 @@ const ChatPage = () => {
                           const otherUserAvatar = conversation.other_user?.avatar_url;
                           const isSelected = selectedUser === otherUser;
                           const unreadCount = getUnreadCount(conversation);
-                          const isOnline = onlineUsers.includes(otherUser);
+                          const isOnline = Array.isArray(onlineUsers) && onlineUsers.includes(otherUser);
                           
                           return (
                             <ConversationItem
@@ -832,8 +832,8 @@ const ChatPage = () => {
                           <Text fontWeight="bold" fontSize="lg">
                             {selectedUserInfo?.full_name || selectedUser}
                           </Text>
-                          <Text fontSize="sm" color={onlineUsers.includes(selectedUser) ? "green.500" : "gray.500"}>
-                            {onlineUsers.includes(selectedUser) ? 
+                                          <Text fontSize="sm" color={(Array.isArray(onlineUsers) && onlineUsers.includes(selectedUser)) ? "green.500" : "gray.500"}>
+                  {(Array.isArray(onlineUsers) && onlineUsers.includes(selectedUser)) ? 
                               '🟢 Online' : 
                               '⚫ Offline'
                             }

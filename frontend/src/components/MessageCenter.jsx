@@ -154,10 +154,17 @@ const MessageCenter = () => {
     }
   };
 
-  const filteredConversations = conversations.filter(conv =>
-    conv.otherUser.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    conv.lastMessage.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredConversations = (conversations || []).filter(conv => {
+    if (!conv) return false;
+    
+    const otherUserMatch = conv.otherUser && typeof conv.otherUser === 'string' && 
+      conv.otherUser.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const lastMessageMatch = conv.lastMessage && typeof conv.lastMessage === 'string' && 
+      conv.lastMessage.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    return otherUserMatch || lastMessageMatch;
+  });
 
   return (
     <Popover placement="bottom-end">

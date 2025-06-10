@@ -268,19 +268,21 @@ const Homepage = () => {
     }
   };
 
-  const filteredPosts = posts.filter(post => {
-    // Text search
+  const filteredPosts = (posts || []).filter(post => {
+    if (!post) return false;
+    
+    // Text search with safe string handling
     const matchesSearch = !debouncedSearchTerm ||
-      (post.title && post.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
-      (post.content && post.content.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
-      (post.location && post.location.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
+      (post.title && typeof post.title === 'string' && post.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+      (post.content && typeof post.content === 'string' && post.content.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+      (post.location && typeof post.location === 'string' && post.location.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
 
     // Time filter
     const matchesTime = matchesTimeFilter(post, filters.timeRange);
 
-    // Location filter
+    // Location filter with safe string handling
     const matchesLocation = !filters.location || 
-      (post.location && post.location.includes(filters.location));
+      (post.location && typeof post.location === 'string' && post.location.includes(filters.location));
 
     // Item type filter
     const matchesItemType = !filters.itemType || 
