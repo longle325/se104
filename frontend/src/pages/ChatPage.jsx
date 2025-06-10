@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Box,
   VStack,
@@ -46,7 +46,6 @@ const ChatPage = () => {
   
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [selectedUser, setSelectedUser] = useState(otherUsername || null);
@@ -294,32 +293,34 @@ const ChatPage = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Enhanced send message with immediate UI update
-  const sendMessage = async () => {
-    if (!newMessage.trim() || !selectedUser || sending) return;
+  // Optimized send message function with useCallback
+  const sendMessage = useCallback(async (messageText) => {
+    if (!messageText?.trim() || !selectedUser || sending) return;
 
-    const messageContent = newMessage.trim();
-    setNewMessage(''); // Clear input immediately
-    setSending(true);
-
-    // Create temporary message for immediate UI update
+    const tempId = `temp_${Date.now()}`;
     const tempMessage = {
-      id: `temp-${Date.now()}`,
+      id: tempId,
       from_user: currentUser.username,
       to_user: selectedUser,
-      content: messageContent,
+      content: messageText.trim(),
       timestamp: new Date().toISOString(),
-      is_temp: true,
+      is_read: false,
       reply_to: replyingTo?.id || null,
       reply_content: replyingTo?.content || null,
-      reply_author: replyingTo?.from_user || null
+      reply_author: replyingTo?.from_user || null,
+      reply_author_display: replyingTo?.from_user === currentUser.username ? 'Bạn' : 
+        (replyingTo?.from_user_info?.full_name || replyingTo?.from_user),
+      is_temp: true
     };
 
-    // Add temporary message to UI immediately
-    setMessages(prev => [...prev, tempMessage]);
-
     try {
-      const response = await fetch(`http://localhost:8000/conversations/${selectedUser}/messages`, {
+      setSending(true);
+      
+      // Add temp message immediately for instant UI feedback
+      setMessages(prev => [...prev, tempMessage]);
+      setReplyingTo(null);
+
+      const response = await fetch('http://localhost:8000/messages/send', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -327,34 +328,28 @@ const ChatPage = () => {
         },
         body: JSON.stringify({
           to_user: selectedUser,
-          content: messageContent,
-          reply_to: replyingTo?.id || null,
+          content: messageText.trim(),
+          reply_to: replyingTo?.id || null
         }),
       });
 
       if (response.ok) {
         const sentMessage = await response.json();
         
-        // Replace temporary message with real message
-        setMessages(prev => 
-          prev.map(msg => 
-            msg.id === tempMessage.id ? sentMessage : msg
-          )
-        );
-        
-        // Clear reply state
-        setReplyingTo(null);
+        // Replace temp message with real message
+        setMessages(prev => prev.map(msg => 
+          msg.id === tempId ? sentMessage : msg
+        ));
         
         // Update conversations list
         fetchConversations();
+        
       } else {
-        // Remove temporary message on error
-        setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
         throw new Error('Failed to send message');
       }
     } catch (error) {
-      // Remove temporary message on error
-      setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
+      // Remove temp message on error
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
       
       toast({
         title: "Lỗi",
@@ -366,20 +361,21 @@ const ChatPage = () => {
     } finally {
       setSending(false);
     }
-  };
+  }, [selectedUser, sending, currentUser, replyingTo, token, toast]);
 
-  const handleKeyPress = (e) => {
+  // Optimized key press handler
+  const handleKeyPress = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     } else if (e.key === 'Escape') {
-      // Cancel reply or edit
       setReplyingTo(null);
       setEditingMessage(null);
     }
-  };
+  }, [sendMessage]);
 
-  const deleteMessage = async (messageId) => {
+  // Optimized delete message function
+  const deleteMessage = useCallback(async (messageId) => {
     if (!confirm('Bạn có chắc chắn muốn thu hồi tin nhắn này?')) return;
 
     try {
@@ -391,7 +387,6 @@ const ChatPage = () => {
       });
 
       if (response.ok) {
-        // Remove message from UI immediately
         setMessages(prev => prev.filter(msg => msg.id !== messageId));
         
         toast({
@@ -413,22 +408,23 @@ const ChatPage = () => {
         isClosable: true,
       });
     }
-  };
+  }, [token, toast]);
 
-  const handleReply = (message) => {
+  // Optimized reply handlers
+  const handleReply = useCallback((message) => {
     setReplyingTo(message);
     setEditingMessage(null);
-  };
+  }, []);
 
-  const handleCancelReply = () => {
+  const handleCancelReply = useCallback(() => {
     setReplyingTo(null);
-  };
+  }, []);
 
-  const selectUser = (username) => {
+  // Optimized user selection
+  const selectUser = useCallback((username) => {
     setSelectedUser(username);
     setReplyingTo(null);
     
-    // Find user info from conversations
     const conversation = conversations.find(conv => 
       conv.other_user?.username === username || 
       conv.participants?.includes(username)
@@ -437,12 +433,11 @@ const ChatPage = () => {
     if (conversation?.other_user) {
       setSelectedUserInfo(conversation.other_user);
     } else {
-      // Fallback to username only
       setSelectedUserInfo({ username, full_name: username, avatar_url: null });
     }
     
     navigate(`/chat/${username}`);
-  };
+  }, [conversations, navigate]);
 
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
@@ -463,6 +458,210 @@ const ChatPage = () => {
     
     return conversation.last_message.is_read ? 0 : 1;
   };
+
+  // Memoized Message Input Component for better performance
+  const MessageInput = React.memo(({ 
+    selectedUser, 
+    replyingTo, 
+    handleCancelReply, 
+    sendMessage, 
+    sending 
+  }) => {
+    const [localMessage, setLocalMessage] = useState('');
+
+    const handleLocalKeyPress = useCallback((e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (localMessage.trim() && !sending) {
+          sendMessage(localMessage);
+          setLocalMessage('');
+        }
+      } else if (e.key === 'Escape') {
+        handleCancelReply();
+      }
+    }, [localMessage, sending, sendMessage, handleCancelReply]);
+
+    const handleLocalSend = useCallback(() => {
+      if (localMessage.trim() && !sending) {
+        sendMessage(localMessage);
+        setLocalMessage('');
+      }
+    }, [localMessage, sending, sendMessage]);
+
+    return (
+      <Box
+        w="full"
+        borderTop="1px solid"
+        borderColor="gray.200"
+        bg="white"
+        boxShadow="sm"
+      >
+        {/* Reply Preview */}
+        {replyingTo && (
+          <Box
+            px={4}
+            py={3}
+            bg="blue.50"
+            borderBottom="1px solid"
+            borderBottomColor="blue.200"
+          >
+            <HStack justify="space-between" align="start">
+              <VStack align="start" spacing={1} flex={1}>
+                <HStack spacing={2}>
+                  <ArrowForwardIcon color="blue.600" boxSize={3} />
+                  <Text fontSize="sm" fontWeight="semibold" color="blue.600">
+                    Đang trả lời
+                  </Text>
+                  <Text fontSize="sm" color="blue.500">
+                    {replyingTo.from_user_info?.full_name || replyingTo.from_user}
+                  </Text>
+                </HStack>
+                <Text fontSize="sm" color="gray.600" noOfLines={2}>
+                  {replyingTo.content}
+                </Text>
+              </VStack>
+              <IconButton
+                icon={<CloseIcon />}
+                size="xs"
+                variant="ghost"
+                colorScheme="blue"
+                onClick={handleCancelReply}
+                aria-label="Hủy trả lời"
+              />
+            </HStack>
+          </Box>
+        )}
+
+        {/* Input Area */}
+        <Box p={4}>
+          <HStack spacing={3}>
+            <InputGroup size="lg">
+              <Input
+                placeholder={replyingTo ? "Nhập phản hồi... (ESC để hủy)" : "Nhập tin nhắn..."}
+                value={localMessage}
+                onChange={(e) => setLocalMessage(e.target.value)}
+                onKeyPress={handleLocalKeyPress}
+                borderRadius="full"
+                border="2px solid"
+                borderColor={replyingTo ? "blue.300" : "gray.200"}
+                _focus={{
+                  borderColor: 'blue.400',
+                  boxShadow: '0 0 10px rgba(59, 130, 246, 0.2)'
+                }}
+                disabled={sending}
+                resize="none"
+                minH="50px"
+                autoFocus
+              />
+              <InputRightElement width="60px" h="full">
+                <IconButton
+                  icon={<Image src={sendIcon} alt="Send" boxSize="20px" />}
+                  size="md"
+                  borderRadius="full"
+                  colorScheme="blue"
+                  onClick={handleLocalSend}
+                  isLoading={sending}
+                  disabled={!localMessage.trim() || sending}
+                  aria-label="Gửi tin nhắn"
+                />
+              </InputRightElement>
+            </InputGroup>
+          </HStack>
+        </Box>
+      </Box>
+    );
+  });
+  MessageInput.displayName = 'MessageInput';
+
+  // Memoized conversation item for better performance
+  const ConversationItem = React.memo(({ conversation, isSelected, onSelect, getUnreadCount }) => {
+    const handleClick = useCallback(() => {
+      onSelect(conversation.other_user?.username);
+    }, [conversation.other_user?.username, onSelect]);
+
+    return (
+      <Box
+        p={4}
+        cursor="pointer"
+        onClick={handleClick}
+        bg={isSelected ? 'blue.50' : 'transparent'}
+        borderLeft={isSelected ? '4px solid' : 'none'}
+        borderLeftColor="blue.500"
+        _hover={{ bg: isSelected ? 'blue.50' : 'gray.50' }}
+        transition="all 0.2s ease"
+        borderBottom="1px solid"
+        borderBottomColor="gray.100"
+      >
+        <HStack spacing={3} align="start">
+          <Box position="relative">
+            <Avatar
+              size="md"
+              name={conversation.other_user?.full_name || conversation.other_user?.username}
+              src={conversation.other_user?.avatar_url ? 
+                `http://localhost:8000${conversation.other_user.avatar_url}` : undefined}
+            />
+            {/* Online status indicator */}
+            <Circle
+              size="12px"
+              bg="green.400"
+              position="absolute"
+              bottom="0"
+              right="0"
+              border="2px solid white"
+              display="none" // Will implement online status later
+            />
+          </Box>
+
+          <VStack align="start" spacing={1} flex={1} minW={0}>
+            <HStack justify="space-between" w="full">
+              <Text
+                fontWeight={getUnreadCount(conversation) > 0 ? "bold" : "semibold"}
+                fontSize="sm"
+                color="gray.800"
+                noOfLines={1}
+              >
+                {conversation.other_user?.full_name || conversation.other_user?.username}
+              </Text>
+              {conversation.last_message && (
+                <Text fontSize="xs" color="gray.500" flexShrink={0}>
+                  {new Date(conversation.last_message.timestamp).toLocaleDateString('vi-VN', { 
+                    day: '2-digit', 
+                    month: '2-digit' 
+                  })}
+                </Text>
+              )}
+            </HStack>
+
+            <HStack justify="space-between" w="full" align="center">
+              <Text
+                fontSize="xs"
+                color={getUnreadCount(conversation) > 0 ? "gray.800" : "gray.500"}
+                fontWeight={getUnreadCount(conversation) > 0 ? "medium" : "normal"}
+                noOfLines={1}
+                flex={1}
+              >
+                {conversation.last_message ? 
+                  `${conversation.last_message.from_user === currentUser.username ? 'Bạn: ' : ''}${conversation.last_message.content}` 
+                  : 'Chưa có tin nhắn'}
+              </Text>
+              {getUnreadCount(conversation) > 0 && (
+                <Badge
+                  colorScheme="blue"
+                  borderRadius="full"
+                  fontSize="xs"
+                  minW="20px"
+                  textAlign="center"
+                >
+                  {getUnreadCount(conversation)}
+                </Badge>
+              )}
+            </HStack>
+          </VStack>
+        </HStack>
+      </Box>
+    );
+  });
+  ConversationItem.displayName = 'ConversationItem';
 
   if (loading) {
     return (
@@ -576,80 +775,13 @@ const ChatPage = () => {
                           const isOnline = onlineUsers.includes(otherUser);
                           
                           return (
-                            <Box
+                            <ConversationItem
                               key={conversation.id || otherUser}
-                              p={4}
-                              cursor="pointer"
-                              bg={isSelected ? 'blue.50' : 'transparent'}
-                              borderLeft={isSelected ? '4px solid' : '4px solid transparent'}
-                              borderLeftColor={isSelected ? 'blue.500' : 'transparent'}
-                              _hover={{ bg: 'blue.50' }}
-                              transition="all 0.2s"
-                              onClick={() => selectUser(otherUser)}
-                            >
-                              <HStack spacing={3} align="start">
-                                <Box position="relative">
-                                  <Avatar 
-                                    size="md" 
-                                    name={otherUserFullName}
-                                    src={otherUserAvatar ? `http://localhost:8000${otherUserAvatar}` : undefined}
-                                    bg="blue.500"
-                                  />
-                                  {isOnline && (
-                                    <Circle
-                                      size="12px"
-                                      bg="green.400"
-                                      border="2px solid white"
-                                      position="absolute"
-                                      bottom="0"
-                                      right="0"
-                                    />
-                                  )}
-                                </Box>
-                                
-                                <VStack align="start" spacing={1} flex={1} minW={0}>
-                                  <HStack justify="space-between" w="full">
-                                    <Text fontWeight="bold" fontSize="md" noOfLines={1}>
-                                      {otherUserFullName}
-                                    </Text>
-                                    {conversation.last_message && (
-                                      <Text fontSize="xs" color="gray.500">
-                                        {formatTime(conversation.last_message.timestamp)}
-                                      </Text>
-                                    )}
-                                  </HStack>
-                                  
-                                  <HStack justify="space-between" w="full">
-                                    <Text
-                                      fontSize="sm"
-                                      color="gray.600"
-                                      noOfLines={2}
-                                      flex={1}
-                                    >
-                                      {conversation.last_message?.content || 'Bắt đầu cuộc trò chuyện'}
-                                    </Text>
-                                    {unreadCount > 0 && (
-                                      <Badge
-                                        colorScheme="red"
-                                        borderRadius="full"
-                                        fontSize="xs"
-                                        minW="20px"
-                                        h="20px"
-                                        display="flex"
-                                        alignItems="center"
-                                        justifyContent="center"
-                                      >
-                                        {unreadCount}
-                                      </Badge>
-                                    )}
-                                  </HStack>
-                                  
-                                  <Text fontSize="xs" color={isOnline ? "green.500" : "gray.400"}>
-                                    {isOnline ? "Đang hoạt động" : "Offline"}
-                                  </Text>
-                                </VStack>
-                              </HStack>
-                            </Box>
+                              conversation={conversation}
+                              isSelected={isSelected}
+                              onSelect={selectUser}
+                              getUnreadCount={getUnreadCount}
+                            />
                           );
                         })}
                       </VStack>
@@ -895,85 +1027,13 @@ const ChatPage = () => {
                     </Box>
 
                     {/* Message Input - Enhanced with Reply */}
-                    <Box
-                      w="full"
-                      borderTop="1px solid"
-                      borderColor={borderColor}
-                      bg="white"
-                      boxShadow="sm"
-                    >
-                      {/* Reply Preview */}
-                      {replyingTo && (
-                        <Box
-                          px={4}
-                          py={3}
-                          bg="blue.50"
-                          borderBottom="1px solid"
-                          borderBottomColor="blue.200"
-                        >
-                          <HStack justify="space-between" align="start">
-                            <VStack align="start" spacing={1} flex={1}>
-                              <HStack spacing={2}>
-                                <ArrowForwardIcon color="blue.600" boxSize={3} />
-                                <Text fontSize="sm" fontWeight="semibold" color="blue.600">
-                                  Đang trả lời
-                                </Text>
-                                <Text fontSize="sm" color="blue.500">
-                                  {replyingTo.from_user === currentUser.username ? 'chính mình' : (replyingTo.from_user_info?.full_name || replyingTo.from_user)}
-                                </Text>
-                              </HStack>
-                              <Text fontSize="sm" color="gray.600" noOfLines={2}>
-                                {replyingTo.content}
-                              </Text>
-                            </VStack>
-                            <IconButton
-                              icon={<CloseIcon />}
-                              size="xs"
-                              variant="ghost"
-                              colorScheme="blue"
-                              onClick={handleCancelReply}
-                              aria-label="Hủy trả lời"
-                            />
-                          </HStack>
-                        </Box>
-                      )}
-
-                      {/* Input Area */}
-                      <Box p={4}>
-                        <HStack spacing={3}>
-                          <InputGroup size="lg">
-                            <Input
-                              placeholder={replyingTo ? "Nhập phản hồi... (ESC để hủy)" : "Nhập tin nhắn..."}
-                              value={newMessage}
-                              onChange={(e) => setNewMessage(e.target.value)}
-                              onKeyPress={handleKeyPress}
-                              borderRadius="full"
-                              border="2px solid"
-                              borderColor={replyingTo ? "blue.300" : "gray.200"}
-                              _focus={{
-                                borderColor: 'blue.400',
-                                boxShadow: '0 0 10px rgba(59, 130, 246, 0.2)'
-                              }}
-                              disabled={sending}
-                              resize="none"
-                              minH="50px"
-                            />
-                            <InputRightElement width="60px" h="full">
-                              <IconButton
-                                icon={<Image src={sendIcon} alt="Send" boxSize="20px" />}
-                                size="md"
-                                borderRadius="full"
-                                colorScheme="blue"
-                                onClick={sendMessage}
-                                isLoading={sending}
-                                disabled={!newMessage.trim() || sending}
-                                aria-label="Gửi tin nhắn"
-                              />
-                            </InputRightElement>
-                          </InputGroup>
-                        </HStack>
-                      </Box>
-                    </Box>
+                    <MessageInput
+                      selectedUser={selectedUser}
+                      replyingTo={replyingTo}
+                      handleCancelReply={handleCancelReply}
+                      sendMessage={sendMessage}
+                      sending={sending}
+                    />
                   </VStack>
                 ) : (
                   <Flex

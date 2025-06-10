@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Container,
@@ -76,13 +76,11 @@ const PostDetailPage = () => {
 
   const [loading, setLoading] = useState(true);
   const [commentsLoading, setCommentsLoading] = useState(false);
-  const [newComment, setNewComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [reportData, setReportData] = useState({ reason: '', description: '' });
   const [submittingReport, setSubmittingReport] = useState(false);
 
   const [replyTo, setReplyTo] = useState(null);
-  const [replyContent, setReplyContent] = useState("");
   const [isReportCommentOpen, setIsReportCommentOpen] = useState(false);
   const [reportingComment, setReportingComment] = useState(null);
   const [reportCommentData, setReportCommentData] = useState({ reason: '', description: '' });
@@ -154,51 +152,189 @@ const PostDetailPage = () => {
     }
   };
 
-  const handleSubmitComment = async () => {
-    if (!newComment.trim() || !user) return;
+  // Function to organize comments into a tree structure
+  const organizeComments = (comments) => {
+    const commentMap = new Map();
+    const rootComments = [];
 
-    try {
-      setSubmittingComment(true);
-      const response = await fetch(`http://localhost:8000/posts/${postId}/comments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-        body: JSON.stringify({
-          post_id: postId,
-          content: newComment.trim(),
-        }),
-      });
+    // First pass: create a map of all comments
+    comments.forEach(comment => {
+      commentMap.set(comment.id, { ...comment, replies: [] });
+    });
 
-      if (response.ok) {
-        const newCommentData = await response.json();
-        setComments(prev => [newCommentData, ...prev]);
-        setNewComment('');
-        toast({
-          title: "Thành công",
-          description: "Bình luận đã được thêm",
-          status: "success",
-          duration: 3000,
-          isClosable: true,
-        });
+    // Second pass: organize into parent-child relationships
+    comments.forEach(comment => {
+      if (comment.parent_id && commentMap.has(comment.parent_id)) {
+        // This is a reply, add it to parent's replies
+        commentMap.get(comment.parent_id).replies.push(commentMap.get(comment.id));
+      } else {
+        // This is a root comment
+        rootComments.push(commentMap.get(comment.id));
       }
-    } catch (error) {
-      toast({
-        title: "Lỗi",
-        description: "Không thể thêm bình luận",
-        status: "error",
-        duration: 3000,
-        isClosable: true,
-      });
-    } finally {
-      setSubmittingComment(false);
-    }
+    });
+
+    return rootComments;
   };
 
-  const handleDeleteComment = async (commentId) => {
-    if (!confirm('Bạn có chắc chắn muốn xóa bình luận này?')) return;
+  // Memoized reply input component
+  const ReplyInput = React.memo(({ commentId, onCancel, onSubmit, isSubmitting }) => {
+    const [localReplyContent, setLocalReplyContent] = useState('');
 
+    const handleKeyDown = useCallback((e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (localReplyContent.trim() && !isSubmitting) {
+          onSubmit(commentId, localReplyContent);
+          setLocalReplyContent('');
+        }
+      }
+    }, [localReplyContent, isSubmitting, commentId, onSubmit]);
+
+    const handleSubmit = useCallback(() => {
+      if (localReplyContent.trim() && !isSubmitting) {
+        onSubmit(commentId, localReplyContent);
+        setLocalReplyContent('');
+      }
+    }, [localReplyContent, isSubmitting, commentId, onSubmit]);
+
+    const handleCancel = useCallback(() => {
+      setLocalReplyContent('');
+      onCancel();
+    }, [onCancel]);
+
+    return (
+      <Box mt={2} ml={10}>
+        <Textarea
+          placeholder="Nhập phản hồi..."
+          value={localReplyContent}
+          onChange={(e) => setLocalReplyContent(e.target.value)}
+          onKeyDown={handleKeyDown}
+          minH="60px"
+          autoFocus
+        />
+        <Text fontSize="xs" color="gray.500" mt={1}>
+          Nhấn Enter để gửi, Shift + Enter để xuống dòng
+        </Text>
+        <HStack mt={2} justify="flex-end">
+          <Button size="sm" onClick={handleCancel} variant="ghost">Hủy</Button>
+          <Button 
+            size="sm" 
+            colorScheme="blue" 
+            isLoading={isSubmitting} 
+            onClick={handleSubmit} 
+            disabled={!localReplyContent.trim()}
+          >
+            Gửi phản hồi
+          </Button>
+        </HStack>
+      </Box>
+    );
+  });
+  ReplyInput.displayName = 'ReplyInput';
+
+  // Memoized comment item component
+  const CommentItem = React.memo(({ comment, depth = 0, onReply, onReport, onDelete, isReplyingTo }) => {
+    const handleReplyClick = useCallback(() => {
+      onReply(comment);
+    }, [comment, onReply]);
+
+    const handleReportClick = useCallback(() => {
+      onReport(comment);
+    }, [comment, onReport]);
+
+    const handleDeleteClick = useCallback(() => {
+      onDelete(comment.id);
+    }, [comment.id, onDelete]);
+
+    const handleProfileClick = useCallback(() => {
+      navigate(`/profile/${comment.author}`);
+    }, [comment.author]);
+
+    return (
+      <Box ml={depth * 6}>
+        <Box p={4} bg={depth === 0 ? "gray.50" : "gray.100"} borderRadius="md" borderLeft={depth > 0 ? "3px solid" : "none"} borderColor={depth > 0 ? "blue.200" : "transparent"}>
+          <HStack justify="space-between" align="start" mb={2}>
+            <HStack>
+              <Avatar 
+                size="sm" 
+                name={comment.author_info?.full_name || comment.author}
+                src={comment.author_info?.avatar_url ? `http://localhost:8000${comment.author_info.avatar_url}` : undefined}
+                cursor="pointer"
+                _hover={{ transform: 'scale(1.05)', shadow: 'md' }}
+                transition="all 0.2s"
+                onClick={handleProfileClick}
+              />
+              <VStack align="start" spacing={0}>
+                <Text 
+                  fontWeight="semibold" 
+                  fontSize="sm"
+                  cursor="pointer"
+                  color="blue.600"
+                  _hover={{ textDecoration: 'underline' }}
+                  onClick={handleProfileClick}
+                >
+                  {comment.author_info?.full_name || comment.author}
+                </Text>
+                <Text fontSize="xs" color="gray.500">
+                  {formatDate(comment.created_at)}
+                </Text>
+              </VStack>
+            </HStack>
+            <HStack>
+              <Button size="xs" leftIcon={<FiCornerDownRight />} variant="ghost" colorScheme="blue" onClick={handleReplyClick}>Trả lời</Button>
+              <Button size="xs" leftIcon={<FiFlag />} variant="ghost" colorScheme="red" onClick={handleReportClick}>Báo cáo</Button>
+              {(user?.username === comment.author || user?.username === 'admin') && (
+                <IconButton
+                  icon={<FiTrash2 />}
+                  size="sm"
+                  variant="ghost"
+                  colorScheme="red"
+                  onClick={handleDeleteClick}
+                />
+              )}
+            </HStack>
+          </HStack>
+          <Text ml={10} color="gray.700" fontSize="sm">
+            {comment.content}
+          </Text>
+          
+          {/* Show reply input if this comment is being replied to */}
+          {isReplyingTo && (
+            <ReplyInput
+              commentId={comment.id}
+              onCancel={() => setReplyTo(null)}
+              onSubmit={handleReplySubmit}
+              isSubmitting={submittingComment}
+            />
+          )}
+        </Box>
+        
+        {/* Render replies */}
+        {comment.replies && comment.replies.length > 0 && (
+          <VStack spacing={2} align="stretch" mt={2}>
+            {comment.replies.map(reply => (
+              <CommentItem 
+                key={reply.id} 
+                comment={reply} 
+                depth={depth + 1}
+                onReply={onReply}
+                onReport={onReport}
+                onDelete={onDelete}
+                isReplyingTo={replyTo?.id === reply.id}
+              />
+            ))}
+          </VStack>
+        )}
+      </Box>
+    );
+  });
+  CommentItem.displayName = 'CommentItem';
+
+  // Memoized organized comments
+  const organizedComments = useMemo(() => organizeComments(comments), [comments]);
+
+  // Optimized delete comment handler (moved up to fix dependency issue)
+  const handleDeleteComment = useCallback(async (commentId) => {
     try {
       const response = await fetch(`http://localhost:8000/posts/${postId}/comments/${commentId}`, {
         method: 'DELETE',
@@ -214,6 +350,15 @@ const PostDetailPage = () => {
           duration: 3000,
           isClosable: true,
         });
+      } else {
+        const errorData = await response.json();
+        toast({
+          title: "Lỗi",
+          description: errorData.detail || "Không thể xóa bình luận",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+        });
       }
     } catch (error) {
       toast({
@@ -224,7 +369,179 @@ const PostDetailPage = () => {
         isClosable: true,
       });
     }
-  };
+  }, [postId, getAuthHeader, toast]);
+
+  // Memoized event handlers
+  const handleReplyClick = useCallback((comment) => {
+    setReplyTo(comment);
+  }, []);
+
+  const handleReportClick = useCallback((comment) => {
+    setReportingComment(comment);
+    setIsReportCommentOpen(true);
+  }, []);
+
+  const handleDeleteClick = useCallback((commentId) => {
+    if (!confirm('Bạn có chắc chắn muốn xóa bình luận này?')) return;
+    handleDeleteComment(commentId);
+  }, [handleDeleteComment]);
+
+  const handleReplySubmit = useCallback(async (parentId, content) => {
+    if (!content.trim() || !user) return;
+
+    try {
+      setSubmittingComment(true);
+      const response = await fetch(`http://localhost:8000/posts/${postId}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify({
+          post_id: postId,
+          content: content.trim(),
+          parent_id: parentId
+        }),
+      });
+
+      if (response.ok) {
+        const newCommentData = await response.json();
+        setComments(prev => [newCommentData, ...prev]);
+        setReplyTo(null);
+        toast({
+          title: "Thành công",
+          description: "Phản hồi đã được thêm",
+          status: "success",
+          duration: 3000,
+          isClosable: true,
+        });
+      } else {
+        const errorData = await response.json();
+        toast({
+          title: "Lỗi",
+          description: errorData.detail || "Không thể thêm phản hồi",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Lỗi",
+        description: "Không thể thêm phản hồi",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+    } finally {
+      setSubmittingComment(false);
+    }
+  }, [postId, user, getAuthHeader, toast]);
+
+  // Memoized main comment input with local state for better performance
+  const MainCommentInput = React.memo(({ 
+    user, 
+    postId, 
+    getAuthHeader, 
+    toast, 
+    setComments, 
+    submittingComment, 
+    setSubmittingComment 
+  }) => {
+    const [localComment, setLocalComment] = useState('');
+    
+    const handleLocalSubmit = useCallback(async () => {
+      if (!localComment.trim() || !user) return;
+
+      try {
+        setSubmittingComment(true);
+        const response = await fetch(`http://localhost:8000/posts/${postId}/comments`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader(),
+          },
+          body: JSON.stringify({
+            post_id: postId,
+            content: localComment.trim(),
+          }),
+        });
+
+        if (response.ok) {
+          const newCommentData = await response.json();
+          setComments(prev => [newCommentData, ...prev]);
+          setLocalComment(''); // Clear local state
+          toast({
+            title: "Thành công",
+            description: "Bình luận đã được thêm",
+            status: "success",
+            duration: 3000,
+            isClosable: true,
+          });
+        } else {
+          const errorData = await response.json();
+          toast({
+            title: "Lỗi",
+            description: errorData.detail || "Không thể thêm bình luận",
+            status: "error",
+            duration: 3000,
+            isClosable: true,
+          });
+        }
+      } catch (error) {
+        toast({
+          title: "Lỗi",
+          description: "Không thể thêm bình luận",
+          status: "error",
+          duration: 3000,
+          isClosable: true,
+        });
+      } finally {
+        setSubmittingComment(false);
+      }
+    }, [localComment, user, postId, getAuthHeader, toast, setComments, setSubmittingComment]);
+
+    const handleKeyDown = useCallback((e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (localComment.trim() && !submittingComment) {
+          handleLocalSubmit();
+        }
+      }
+    }, [localComment, submittingComment, handleLocalSubmit]);
+
+    return (
+      <Box mb={6} p={4} bg="gray.50" borderRadius="md">
+        <VStack spacing={3}>
+          <Textarea
+            placeholder="Viết bình luận của bạn..."
+            value={localComment}
+            onChange={(e) => setLocalComment(e.target.value)}
+            onKeyDown={handleKeyDown}
+            resize="vertical"
+            minH="80px"
+            autoFocus
+          />
+          <Text fontSize="xs" color="gray.500" alignSelf="flex-start">
+            Nhấn Enter để gửi, Shift + Enter để xuống dòng
+          </Text>
+          <HStack w="full" justify="flex-end">
+            <Button
+              leftIcon={<FiSend />}
+              colorScheme="blue"
+              size="sm"
+              onClick={handleLocalSubmit}
+              isLoading={submittingComment}
+              disabled={!localComment.trim()}
+            >
+              Gửi bình luận
+            </Button>
+          </HStack>
+        </VStack>
+      </Box>
+    );
+  });
+  MainCommentInput.displayName = 'MainCommentInput';
 
   const handleSubmitReport = async () => {
     if (!reportData.reason) {
@@ -401,37 +718,6 @@ const PostDetailPage = () => {
     }
   };
 
-  const handleReplyComment = async (parentId) => {
-    if (!replyContent.trim() || !user) return;
-    try {
-      setSubmittingComment(true);
-      const response = await fetch(`http://localhost:8000/posts/${postId}/comments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-        body: JSON.stringify({
-          content: replyContent.trim(),
-          parent_id: parentId
-        }),
-      });
-      if (response.ok) {
-        const newCommentData = await response.json();
-        setComments(prev => [newCommentData, ...prev]);
-        setReplyTo(null);
-        setReplyContent("");
-      }
-    } finally {
-      setSubmittingComment(false);
-    }
-  };
-
-  const handleOpenReportComment = (comment) => {
-    setReportingComment(comment);
-    setIsReportCommentOpen(true);
-  };
-
   const handleSubmitReportComment = async () => {
     if (!reportCommentData.reason || !reportingComment) return;
     try {
@@ -444,15 +730,57 @@ const PostDetailPage = () => {
         },
         body: JSON.stringify(reportCommentData),
       });
+      
       if (response.ok) {
-        toast({ title: 'Đã gửi báo cáo', status: 'success', duration: 3000, isClosable: true });
+        toast({ 
+          title: 'Thành công', 
+          description: 'Báo cáo bình luận đã được gửi',
+          status: 'success', 
+          duration: 3000, 
+          isClosable: true 
+        });
         setIsReportCommentOpen(false);
         setReportCommentData({ reason: '', description: '' });
         setReportingComment(null);
+      } else {
+        const errorData = await response.json();
+        toast({ 
+          title: 'Lỗi', 
+          description: errorData.detail || 'Không thể gửi báo cáo',
+          status: 'error', 
+          duration: 3000, 
+          isClosable: true 
+        });
       }
+    } catch (error) {
+      console.error('Report comment error:', error);
+      toast({ 
+        title: 'Lỗi', 
+        description: 'Không thể gửi báo cáo bình luận',
+        status: 'error', 
+        duration: 3000, 
+        isClosable: true 
+      });
     } finally {
       setSubmittingCommentReport(false);
     }
+  };
+
+  const getStatusDisplay = (category, status) => {
+    if (!status || status === 'active') return null;
+    
+    const statusMap = {
+      lost: {
+        found: { text: "Đã tìm được", color: "green" },
+        not_found: { text: "Chưa tìm được", color: "orange" }
+      },
+      found: {
+        returned: { text: "Đã hoàn trả", color: "green" },
+        not_returned: { text: "Chưa hoàn trả", color: "orange" }
+      }
+    };
+    
+    return statusMap[category]?.[status] || null;
   };
 
   if (loading) {
@@ -563,13 +891,13 @@ const PostDetailPage = () => {
                     >
                       {getItemTypeName(post.item_type)}
                     </Tag>
-                    {post.status && (
+                    {post.status && post.status !== 'active' && (
                       <Tag
                         size="md"
-                        colorScheme={post.status === 'resolved' ? 'green' : 'orange'}
+                        colorScheme={getStatusDisplay(post.category, post.status)?.color || 'gray'}
                         borderRadius="full"
                       >
-                        {post.status === 'resolved' ? 'Đã giải quyết' : 'Chưa giải quyết'}
+                        {getStatusDisplay(post.category, post.status)?.text || 'Chưa cập nhật'}
                       </Tag>
                     )}
                   </HStack>
@@ -688,29 +1016,15 @@ const PostDetailPage = () => {
 
                 {/* Add Comment */}
                 {user ? (
-                  <Box mb={6} p={4} bg="gray.50" borderRadius="md">
-                    <VStack spacing={3}>
-                      <Textarea
-                        placeholder="Viết bình luận của bạn..."
-                        value={newComment}
-                        onChange={(e) => setNewComment(e.target.value)}
-                        resize="vertical"
-                        minH="80px"
-                      />
-                      <HStack w="full" justify="flex-end">
-                        <Button
-                          leftIcon={<FiSend />}
-                          colorScheme="blue"
-                          size="sm"
-                          onClick={handleSubmitComment}
-                          isLoading={submittingComment}
-                          disabled={!newComment.trim()}
-                        >
-                          Gửi bình luận
-                        </Button>
-                      </HStack>
-                    </VStack>
-                  </Box>
+                  <MainCommentInput 
+                    user={user} 
+                    postId={postId} 
+                    getAuthHeader={getAuthHeader} 
+                    toast={toast} 
+                    setComments={setComments} 
+                    submittingComment={submittingComment} 
+                    setSubmittingComment={setSubmittingComment} 
+                  />
                 ) : (
                   <Alert status="info" mb={6}>
                     <AlertIcon />
@@ -729,56 +1043,16 @@ const PostDetailPage = () => {
                   </Center>
                 ) : comments.length > 0 ? (
                   <VStack spacing={4} align="stretch">
-                    {comments.map((comment) => (
-                      <Box key={comment.id} p={4} bg="gray.50" borderRadius="md">
-                        <HStack justify="space-between" align="start" mb={2}>
-                          <HStack>
-                            <Avatar 
-                              size="sm" 
-                              name={comment.author_info?.full_name || comment.author}
-                              src={comment.author_info?.avatar_url ? `http://localhost:8000${comment.author_info.avatar_url}` : undefined}
-                            />
-                            <VStack align="start" spacing={0}>
-                              <Text fontWeight="semibold" fontSize="sm">
-                                {comment.author_info?.full_name || comment.author}
-                              </Text>
-                              <Text fontSize="xs" color="gray.500">
-                                {formatDate(comment.created_at)}
-                              </Text>
-                            </VStack>
-                          </HStack>
-                          <HStack>
-                            <Button size="xs" leftIcon={<FiCornerDownRight />} variant="ghost" colorScheme="blue" onClick={() => { setReplyTo(comment); setReplyContent(""); }}>Trả lời</Button>
-                            <Button size="xs" leftIcon={<FiFlag />} variant="ghost" colorScheme="red" onClick={() => handleOpenReportComment(comment)}>Báo cáo</Button>
-                            {(user?.username === comment.author || user?.username === 'admin') && (
-                              <IconButton
-                                icon={<FiTrash2 />}
-                                size="sm"
-                                variant="ghost"
-                                colorScheme="red"
-                                onClick={() => handleDeleteComment(comment.id)}
-                              />
-                            )}
-                          </HStack>
-                        </HStack>
-                        <Text ml={10} color="gray.700" fontSize="sm">
-                          {comment.content}
-                        </Text>
-                        {replyTo?.id === comment.id && (
-                          <Box mt={2} ml={10}>
-                            <Textarea
-                              placeholder="Nhập phản hồi..."
-                              value={replyContent}
-                              onChange={e => setReplyContent(e.target.value)}
-                              minH="60px"
-                            />
-                            <HStack mt={2} justify="flex-end">
-                              <Button size="sm" onClick={() => setReplyTo(null)} variant="ghost">Hủy</Button>
-                              <Button size="sm" colorScheme="blue" isLoading={submittingComment} onClick={() => handleReplyComment(comment.id)} disabled={!replyContent.trim()}>Gửi phản hồi</Button>
-                            </HStack>
-                          </Box>
-                        )}
-                      </Box>
+                    {organizedComments.map((comment) => (
+                      <CommentItem 
+                        key={comment.id} 
+                        comment={comment} 
+                        depth={0}
+                        onReply={handleReplyClick}
+                        onReport={handleReportClick}
+                        onDelete={handleDeleteClick}
+                        isReplyingTo={replyTo?.id === comment.id}
+                      />
                     ))}
                   </VStack>
                 ) : (
