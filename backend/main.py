@@ -11,6 +11,7 @@ import pytz
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
@@ -30,7 +31,8 @@ from oauth import get_current_user
 from models import (
     User, UserRegistration, Login, Token, TokenData, EmailVerification, PasswordResetRequest, 
     VerificationCode, PasswordReset, UserProfile, Post, PostResponse, 
-    DirectMessage, DirectMessageResponse, Conversation, PostUpdate, PostReport, PostReportResponse, Comment, CommentResponse, Notification, NotificationResponse,
+    DirectMessage, DirectMessageResponse, Conversation, PostUpdate, PostReport, PostReportResponse, 
+    Comment, CommentResponse, CommentReport, CommentReportResponse, Notification, NotificationResponse,
     AdminLogin, UserBan, UserMute, AdminDashboardStats, AdminUserResponse, AdminPostResponse, AdminReportResponse, AdminActionLog, ReportAction
 )
 
@@ -149,7 +151,7 @@ def _send_email_task(to_email: str, subject: str, html_content: str):
         
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
-        message["From"] = gmail_user
+        message["From"] = formataddr(("UIT-W2F", gmail_user))
         message["To"] = to_email
         
         # Add HTML content
@@ -1508,6 +1510,17 @@ def create_comment(post_id: str, comment_data: Comment, current_user: User = Dep
         "updated_at": get_vietnam_time_naive()
     }
     
+    # Add parent_id if this is a reply
+    if hasattr(comment_data, 'parent_id') and comment_data.parent_id:
+        # Verify parent comment exists
+        try:
+            parent_comment = db["Comment"].find_one({"_id": ObjectId(comment_data.parent_id)})
+            if not parent_comment:
+                raise HTTPException(status_code=404, detail="Parent comment not found")
+            comment_dict["parent_id"] = comment_data.parent_id
+        except:
+            raise HTTPException(status_code=400, detail="Invalid parent comment ID")
+    
     result = db["Comment"].insert_one(comment_dict)
     comment_dict["id"] = str(result.inserted_id)
     del comment_dict["_id"]
@@ -1562,9 +1575,69 @@ def delete_comment(post_id: str, comment_id: str, current_user: User = Depends(g
     if comment["author"] != current_user.username and current_user.username != "admin":
         raise HTTPException(status_code=403, detail="You can only delete your own comments")
     
+    # Delete the comment
     db["Comment"].delete_one({"_id": ObjectId(comment_id)})
     
-    return {"message": "Comment deleted successfully"}
+    # Also delete all reply comments (recursive deletion)
+    reply_comments = list(db["Comment"].find({"parent_id": comment_id}))
+    if reply_comments:
+        reply_ids = [comment["_id"] for comment in reply_comments]
+        db["Comment"].delete_many({"_id": {"$in": reply_ids}})
+        
+        # Recursively delete deeper nested replies
+        for reply in reply_comments:
+            reply_id = str(reply["_id"])
+            deep_replies = list(db["Comment"].find({"parent_id": reply_id}))
+            if deep_replies:
+                db["Comment"].delete_many({"parent_id": reply_id})
+    
+    return {"message": "Comment and all replies deleted successfully"}
+
+@app.post("/comments/{comment_id}/report")
+def report_comment(comment_id: str, report_data: CommentReport, current_user: User = Depends(get_current_user)):
+    """Report a comment"""
+    try:
+        # Validate ObjectId format
+        if not ObjectId.is_valid(comment_id):
+            raise HTTPException(status_code=400, detail=f"Invalid comment ID format: {comment_id}")
+            
+        # Check if comment exists
+        comment = db["Comment"].find_one({"_id": ObjectId(comment_id)})
+        if not comment:
+            raise HTTPException(status_code=404, detail="Comment not found")
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=400, detail=f"Invalid comment ID: {str(e)}")
+    
+    # Check if user has already reported this comment
+    existing_report = db["CommentReport"].find_one({
+        "comment_id": comment_id,
+        "reporter": current_user.username
+    })
+    
+    if existing_report:
+        raise HTTPException(status_code=400, detail="You have already reported this comment")
+    
+    # Check if user is trying to report their own comment
+    if comment["author"] == current_user.username:
+        raise HTTPException(status_code=400, detail="You cannot report your own comment")
+    
+    # Create report
+    report_dict = {
+        "comment_id": comment_id,
+        "reporter": current_user.username,
+        "reason": report_data.reason,
+        "description": report_data.description,
+        "created_at": get_vietnam_time_naive(),
+        "status": "pending"
+    }
+    
+    result = db["CommentReport"].insert_one(report_dict)
+    report_dict["id"] = str(result.inserted_id)
+    del report_dict["_id"]
+    
+    return {"message": "Comment report submitted successfully", "report": report_dict}
 
 # Get similar posts (recommendation algorithm)
 @app.get("/posts/{post_id}/similar")

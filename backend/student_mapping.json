@@ -14,7 +14,8 @@
     "21522005": "Hoàng Văn Em",
     "21522006": "Vũ Thị Phương",
     "21522007": "Đặng Văn Giang",
-    "21522008": "Mai Thị Hoa"
+    "21522008": "Mai Thị Hoa",
+    "23521461": "Phan Xuân Thành"
   },
   "description": "Mapping file for student ID (MSSV) to full name. Add entries manually in format: 'MSSV': 'Full Name'"
 } 

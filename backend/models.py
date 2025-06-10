@@ -109,7 +109,6 @@ class Conversation(BaseModel):
     updated_at: datetime
 
 class PostReport(BaseModel):
-    post_id: str
     reason: str  # "spam", "inappropriate", "fake", "other"
     description: Optional[str] = None  # Additional details
     
@@ -122,12 +121,23 @@ class PostReportResponse(PostReport):
 class Comment(BaseModel):
     post_id: str
     content: str
+    parent_id: Optional[str] = None  # For reply comments
     
 class CommentResponse(Comment):
     id: str
     author: str
     created_at: datetime
     updated_at: Optional[datetime] = None
+    
+class CommentReport(BaseModel):
+    reason: str  # "spam", "inappropriate", "harassment", "other"
+    description: Optional[str] = None  # Additional details
+    
+class CommentReportResponse(CommentReport):
+    id: str
+    reporter: str
+    created_at: datetime
+    status: str  # "pending", "reviewed", "resolved"
 
 class Notification(BaseModel):
     user_id: str  # recipient username
