@@ -166,41 +166,6 @@ frontend/src/
 │   └── constants.js           # App constants
 └── assets/                    # Static resources
 ```
-
-## 🔑 Tính năng chi tiết
-
-### 1. Hệ thống xác thực
-- Đăng ký với email UIT (@gm.uit.edu.vn)
-- Xác thực email tự động
-- JWT token với refresh mechanism
-- Bảo mật session và CORS
-
-### 2. Quản lý bài đăng
-- **Tạo bài đăng**: Upload ảnh, mô tả chi tiết
-- **Phân loại**: "Tìm đồ" / "Nhặt được"
-- **Trạng thái**: Tự động set "Chưa tìm được"/"Chưa hoàn trả"
-- **Tìm kiếm**: Filter theo category, location, keywords
-- **View tracking**: Đếm lượt xem bài đăng
-
-### 3. Chat realtime
-- **1-1 messaging**: Chat trực tiếp giữa users
-- **Typing indicators**: Hiển thị đang nhập
-- **Message status**: Đã gửi/đã đọc indicators
-- **Message actions**: Thu hồi, chỉnh sửa (15 phút)
-- **Auto-draft**: Tin nhắn soạn sẵn từ "Liên hệ ngay"
-
-### 4. Thông báo
-- **Realtime notifications**: WebSocket push
-- **Email notifications**: Background task processing
-- **Badge counts**: Unread message/notification counts
-- **Action notifications**: Comment, message, status updates
-
-### 5. Admin panel
-- **User management**: Ban/mute users
-- **Content moderation**: Review posts/comments
-- **Analytics dashboard**: System statistics
-- **Report handling**: Process user reports
-
 ## 🔧 Configuration
 
 ### Environment Variables
@@ -270,4 +235,4 @@ notifications: {
 
 ## 📄 License
 
-MIT License - Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
+MIT License - Xem file [LICENSE](LICENSE)
