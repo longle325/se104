@@ -24,6 +24,7 @@ import { FiMessageCircle, FiSearch, FiMoreHorizontal } from "react-icons/fi";
 import { useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
 import { useNavigate } from "react-router-dom";
+import { safeAvatarName } from "../utils/avatarUtils";
 
 const MessageCenter = () => {
   const [conversations, setConversations] = useState([]);
@@ -263,7 +264,7 @@ const MessageCenter = () => {
                     <Box position="relative">
                       <Avatar 
                         size="md" 
-                        name={conversation.otherUser}
+                                                    name={safeAvatarName(conversation.otherUser)}
                         src={conversation.avatar ? `http://localhost:8000${conversation.avatar}` : undefined}
                         bg="blue.500"
                       />
@@ -340,5 +341,4 @@ const MessageCenter = () => {
     </Popover>
   );
 };
-
 export default MessageCenter; 

@@ -53,6 +53,8 @@ import { useNavigate } from "react-router-dom";
 import { FiSearch, FiMapPin, FiClock, FiUser, FiMessageCircle, FiPlus, FiEye, FiShare2, FiFilter, FiX, FiChevronLeft, FiChevronRight, FiEdit, FiTrash2, FiFlag } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import Navigation from "../components/Navigation";
+import ImageGallery from "../components/ImageGallery";
+import { safeAvatarName } from "../utils/avatarUtils";
 
 // Import assets
 import logoUIT from "../assets/HOMEPAGE/logo UIT.png";
@@ -127,17 +129,22 @@ const Homepage = () => {
 
   const fetchPosts = async () => {
     try {
+      console.log('🔍 Fetching posts with category:', selectedCategory);
       const response = await fetch(`http://localhost:8000/posts?category=${selectedCategory}&limit=200`, {
         headers: getAuthHeader(),
       });
       
       if (response.ok) {
         const data = await response.json();
+        console.log('✅ Posts fetched successfully:', data.length, 'posts');
+        console.log('📝 Sample post:', data[0]);
         setPosts(data);
       } else {
+        console.error('❌ Failed to fetch posts:', response.status);
         throw new Error("Failed to fetch posts");
       }
     } catch (error) {
+      console.error('❌ Error fetching posts:', error);
       toast({
         title: "Lỗi",
         description: "Không thể tải danh sách bài viết",
@@ -298,6 +305,18 @@ const Homepage = () => {
   const endIndex = startIndex + postsPerPage;
   const currentPosts = filteredPosts.slice(startIndex, endIndex);
 
+  console.log('📊 Posts Debug Info:');
+  console.log('- Total posts from API:', posts?.length || 0);
+  console.log('- Filtered posts:', filteredPosts.length);
+  console.log('- Current page:', currentPage);
+  console.log('- Posts per page:', postsPerPage);
+  console.log('- Start index:', startIndex);
+  console.log('- End index:', endIndex);
+  console.log('- Current posts:', currentPosts.length);
+  console.log('- Search term:', debouncedSearchTerm);
+  console.log('- Selected category:', selectedCategory);
+  console.log('- Filters:', filters);
+
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1);
@@ -379,39 +398,26 @@ const Homepage = () => {
       const postLink = `${window.location.origin}/posts/${postId}`;
       const message = `Chào bạn! Tôi quan tâm đến bài đăng "${postTitle}" của bạn.\n\n📝 Bài đăng: ${postLink}\n\nCó thể liên hệ để biết thêm chi tiết không?`;
       
-      const response = await fetch(`http://localhost:8000/conversations/${postAuthor}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-        body: JSON.stringify({
-          to_user: postAuthor,
-          content: message,
-          post_id: postId,
-          post_link: postLink
-        }),
-      });
-
-      if (response.ok) {
+      // Store draft message in sessionStorage and navigate to chat
+      sessionStorage.setItem('chatDraftMessage', message);
+      sessionStorage.setItem('chatDraftPostId', postId);
+      sessionStorage.setItem('chatDraftPostLink', postLink);
+      
+      // Navigate to chat with draft parameter
+      navigate(`/chat/${postAuthor}?draft=true`);
+      onClose();
+      
         toast({
-          title: "Thành công",
-          description: "Tin nhắn đã được gửi với liên kết bài đăng",
-          status: "success",
+        title: "Chuyển đến chat",
+        description: "Tin nhắn mẫu đã được tạo, bạn có thể chỉnh sửa trước khi gửi",
+        status: "info",
           duration: 3000,
           isClosable: true,
         });
-        
-        // Navigate to chat with the user
-        navigate(`/chat/${postAuthor}`);
-        onClose();
-      } else {
-        throw new Error('Failed to send message');
-      }
     } catch (error) {
       toast({
         title: "Lỗi",
-        description: "Không thể gửi tin nhắn",
+        description: "Không thể chuyển đến trang chat",
         status: "error",
         duration: 3000,
         isClosable: true,
@@ -747,6 +753,7 @@ const Homepage = () => {
                   {/* Image */}
                   <Box mb={3} flexShrink={0} position="relative" overflow="hidden" borderRadius="md">
                     {post.image_urls && post.image_urls.length > 0 ? (
+                      <Box position="relative">
                       <Image
                         src={`http://localhost:8000${post.image_urls[0]}`}
                         alt={post.title}
@@ -757,15 +764,30 @@ const Homepage = () => {
                         loading="lazy"
                         transition="all 0.3s ease"
                         _hover={{ transform: "scale(1.05)" }}
+                          cursor="pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handlePostClick(post);
+                          }}
                         fallbackSrc="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIwIiBoZWlnaHQ9IjE2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjdmYWZjIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk0YTNiOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkRhbmcgdOG6o2k8L3RleHQ+PC9zdmc+"
-                        onLoad={(e) => {
-                          e.target.style.filter = 'blur(0px)';
-                        }}
-                        onLoadStart={(e) => {
-                          e.target.style.filter = 'blur(5px)';
-                          e.target.style.transition = 'filter 0.3s ease';
-                        }}
-                      />
+                        />
+                        {/* Image count badge */}
+                        {post.image_urls.length > 1 && (
+                          <Badge
+                            position="absolute"
+                            top={2}
+                            right={2}
+                            bg="blackAlpha.600"
+                            color="white"
+                            fontSize="xs"
+                            px={2}
+                            py={1}
+                            borderRadius="full"
+                          >
+                            +{post.image_urls.length - 1}
+                          </Badge>
+                        )}
+                      </Box>
                     ) : (
                       <Box
                         w="full"
@@ -830,7 +852,7 @@ const Homepage = () => {
                         <HStack spacing={1}>
                           <Avatar 
                             size="xs" 
-                            name={post.author_info?.full_name || post.author}
+                            name={safeAvatarName(post.author_info?.full_name || post.author)}
                             src={post.author_info?.avatar_url ? `http://localhost:8000${post.author_info.avatar_url}` : undefined}
                           />
                           <Text fontWeight="medium">
@@ -1060,26 +1082,9 @@ const Homepage = () => {
             <ModalBody pb={6}>
               {selectedPost && (
                 <VStack spacing={4} align="stretch">
-                  {/* Images */}
+                  {/* Images Gallery */}
                   {selectedPost.image_urls && selectedPost.image_urls.length > 0 && (
-                    <SimpleGrid columns={selectedPost.image_urls.length === 1 ? 1 : 2} spacing={2}>
-                      {selectedPost.image_urls.map((imageUrl, index) => (
-                        <Box key={index} position="relative" overflow="hidden" borderRadius="md">
-                          <Image
-                            src={`http://localhost:8000${imageUrl}`}
-                            alt={`${selectedPost.title} image ${index + 1}`}
-                            borderRadius="md"
-                            objectFit="cover"
-                            maxH="300px"
-                            w="full"
-                            loading="lazy"
-                            transition="all 0.3s ease"
-                            _hover={{ transform: "scale(1.02)" }}
-                            fallbackSrc="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjdmYWZjIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNiIgZmlsbD0iIzk0YTNiOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkRhbmcgdOG6o2kgaOG7i25oIGFuaDwvdGV4dD48L3N2Zz4="
-                          />
-                        </Box>
-                      ))}
-                    </SimpleGrid>
+                    <ImageGallery images={selectedPost.image_urls} title={selectedPost.title} />
                   )}
 
                   {/* Content */}
@@ -1103,7 +1108,7 @@ const Homepage = () => {
                     <HStack>
                       <Avatar 
                         size="sm" 
-                        name={selectedPost.author_info?.full_name || selectedPost.author}
+                        name={safeAvatarName(selectedPost.author_info?.full_name || selectedPost.author)}
                         src={selectedPost.author_info?.avatar_url ? `http://localhost:8000${selectedPost.author_info.avatar_url}` : undefined}
                       />
                       <Text>

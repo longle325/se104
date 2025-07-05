@@ -24,12 +24,24 @@ import {
   CardHeader,
   Circle,
   Stack,
-  Tooltip
+  Tooltip,
+  Fade,
+  ScaleFade,
+  Textarea,
+  Alert,
+  AlertIcon,
+  AlertTitle,
+  AlertDescription
 } from '@chakra-ui/react';
 import { ArrowBackIcon, ChatIcon, CloseIcon, DeleteIcon, RepeatIcon, ArrowForwardIcon } from '@chakra-ui/icons';
+import { FiSend, FiMoreVertical, FiSmile, FiPaperclip, FiMic, FiImage, FiVideo, FiCheck, FiCheckCircle } from 'react-icons/fi';
 import { useAuth } from '../components/AuthContext';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useSocket } from '../components/SocketContext';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import Navigation from '../components/Navigation';
+import { useChat } from '../hooks/useChat';
+import { safeAvatarName } from '../utils/avatarUtils';
+import { safeText, safeUserName } from '../utils/textUtils';
 
 // Import BOX CHAT assets
 import chatTrucTiepIcon from '../assets/BOX CHAT/chattructiep@4x.png';
@@ -40,23 +52,43 @@ import leftArrowIcon from '../assets/BOX CHAT/left-arrow_318226.png';
 
 const ChatPage = () => {
   const { currentUser, token } = useAuth();
+  const { socket, isConnected, onlineUsers } = useSocket();
   const navigate = useNavigate();
+  const location = useLocation();
   const { otherUsername } = useParams();
   const toast = useToast();
   
-  const [conversations, setConversations] = useState([]);
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(otherUsername || null);
-  const [selectedUserInfo, setSelectedUserInfo] = useState(null);
-  const [onlineUsers, setOnlineUsers] = useState([]);
-  const [wsConnected, setWsConnected] = useState(false);
-  const [replyingTo, setReplyingTo] = useState(null);
-  const [editingMessage, setEditingMessage] = useState(null);
+  // Draft message states
+  const [showDraftAlert, setShowDraftAlert] = useState(false);
+  const [draftPostInfo, setDraftPostInfo] = useState(null);
+  const [debugInfo, setDebugInfo] = useState({
+    currentUser: null,
+    token: null,
+    isConnected: false,
+    conversationsLength: 0,
+    messagesLength: 0,
+    selectedUser: null,
+    loading: true,
+    error: null
+  });
   
-  const ws = useRef(null);
-  const messagesEndRef = useRef(null);
+  const {
+    conversations,
+    messages,
+    loading,
+    sending,
+    selectedUser,
+    otherUserTyping,
+    unreadCount,
+    draftMessage,
+    setDraftMessage,
+    sendMessage,
+    deleteMessage,
+    selectUser,
+    startTyping,
+    stopTyping,
+    messagesEndRef
+  } = useChat(otherUsername);
   
   const bgColor = useColorModeValue('gray.50', 'gray.900');
   const cardBg = useColorModeValue('white', 'gray.800');
@@ -64,595 +96,270 @@ const ChatPage = () => {
   const messageBg = useColorModeValue('blue.500', 'blue.600');
   const receivedBg = useColorModeValue('gray.100', 'gray.700');
 
-  // WebSocket Connection with improved realtime handling
+  // Debug effect
   useEffect(() => {
-    if (!currentUser || !token) return;
-    
-    const connectWebSocket = () => {
-      const wsUrl = `ws://localhost:8000/ws/${currentUser.username}?token=${token}`;
-      ws.current = new WebSocket(wsUrl);
-      
-      ws.current.onopen = () => {
-        console.log('WebSocket connected');
-        setWsConnected(true);
-        
-        // Send ping every 30 seconds to keep connection alive
-        const pingInterval = setInterval(() => {
-          if (ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(JSON.stringify({ type: 'ping' }));
-          }
-        }, 30000);
-        
-        // Store interval to clear it later
-        ws.current.pingInterval = pingInterval;
-      };
-      
-      ws.current.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'new_message') {
-            const message = data.message;
-            
-            // Update messages if viewing this conversation - REALTIME UPDATE
-            if (selectedUser && 
-                (message.from_user === selectedUser || message.to_user === selectedUser)) {
-              setMessages(prev => {
-                // Check if message already exists to prevent duplicates
-                const messageExists = prev.some(m => m.id === message.id);
-                if (!messageExists) {
-                  return [...prev, message];
-                }
-                return prev;
-              });
-            }
-            
-            // Update conversations list immediately
-            fetchConversations();
-            
-            // Show notification if not the current conversation
-            if (!selectedUser || 
-                (message.from_user !== selectedUser && message.from_user !== currentUser.username)) {
-              toast({
-                title: `Tin nhắn mới từ ${message.from_user}`,
-                description: message.content,
-                status: 'info',
-                duration: 5000,
-                isClosable: true,
-                position: 'top-right'
-              });
-            }
-          }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-        }
-      };
-      
-      ws.current.onclose = () => {
-        console.log('WebSocket disconnected');
-        setWsConnected(false);
-        if (ws.current?.pingInterval) {
-          clearInterval(ws.current.pingInterval);
-        }
-        
-        // Reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
-      };
-      
-      ws.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setWsConnected(false);
-      };
-    };
-    
-    connectWebSocket();
-    
-    return () => {
-      if (ws.current) {
-        if (ws.current.pingInterval) {
-          clearInterval(ws.current.pingInterval);
-        }
-        ws.current.close();
-      }
-    };
-  }, [currentUser, token]);
+    setDebugInfo({
+      currentUser: currentUser?.username || 'Not logged in',
+      token: token ? 'Available' : 'Missing',
+      isConnected: isConnected,
+      conversationsLength: conversations.length,
+      messagesLength: messages.length,
+      selectedUser: selectedUser,
+      loading: loading,
+      error: !currentUser ? 'No current user' : !token ? 'No token' : null
+    });
+  }, [currentUser, token, isConnected, conversations, messages, selectedUser, loading]);
 
-  // Enhanced auto scroll to bottom when new messages arrive
+  // Handle draft message from sessionStorage
   useEffect(() => {
-    if (messagesEndRef.current) {
-      const scrollContainer = messagesEndRef.current.parentElement?.parentElement;
-      if (scrollContainer) {
-        // Check if user is near bottom before auto-scrolling
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-        const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+    const urlParams = new URLSearchParams(location.search);
+    const isDraft = urlParams.get('draft') === 'true';
+    
+    if (isDraft && otherUsername) {
+      const storedDraftMessage = sessionStorage.getItem('chatDraftMessage');
+      const storedPostId = sessionStorage.getItem('chatDraftPostId');
+      const storedPostLink = sessionStorage.getItem('chatDraftPostLink');
+      
+      if (storedDraftMessage) {
+        setDraftMessage(storedDraftMessage);
+        setShowDraftAlert(true);
         
-        if (isNearBottom || messages.length === 1) {
-          // Smooth scroll to bottom
-          setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ 
-              behavior: 'smooth', 
-              block: 'end',
-              inline: 'nearest'
-            });
-          }, 100);
+        if (storedPostId || storedPostLink) {
+          setDraftPostInfo({
+            postId: storedPostId,
+            postLink: storedPostLink
+          });
         }
+        
+        // Clear from sessionStorage
+        sessionStorage.removeItem('chatDraftMessage');
+        sessionStorage.removeItem('chatDraftPostId');
+        sessionStorage.removeItem('chatDraftPostLink');
+        
+        // Clear URL parameters
+        navigate(`/chat/${otherUsername}`, { replace: true });
       }
     }
-  }, [messages]);
+  }, [location, otherUsername, setDraftMessage, navigate]);
 
-  // Auto-select user from URL parameter
-  useEffect(() => {
-    if (otherUsername && !selectedUser) {
-      setSelectedUser(otherUsername);
+  // Early return with debug info if no user or token
+  if (!currentUser || !token) {
+    return (
+      <Navigation>
+        <Container maxW="8xl" h="calc(100vh - 80px)" py={4}>
+          <Flex h="full" justify="center" align="center">
+            <VStack spacing={4}>
+              <Alert status="error">
+                <AlertIcon />
+                <AlertTitle>Lỗi xác thực!</AlertTitle>
+                <AlertDescription>
+                  Vui lòng đăng nhập lại để sử dụng tính năng chat.
+                </AlertDescription>
+              </Alert>
+              <Button colorScheme="blue" onClick={() => navigate('/login')}>
+                Đăng nhập
+              </Button>
+            </VStack>
+          </Flex>
+        </Container>
+      </Navigation>
+    );
+  }
+
+  const handleSendMessage = async () => {
+    if (!draftMessage.trim() || sending) return;
+    
+    const postId = draftPostInfo?.postId || null;
+    const postLink = draftPostInfo?.postLink || null;
+    
+    const success = await sendMessage(draftMessage, postId, postLink);
+    
+    if (success) {
+      setShowDraftAlert(false);
+      setDraftPostInfo(null);
     }
-  }, [otherUsername, selectedUser]);
+  };
 
-  // Set selectedUserInfo when selectedUser changes and conversations are loaded
-  useEffect(() => {
-    if (selectedUser && conversations.length > 0) {
-      const conversation = conversations.find(conv => 
-        conv.other_user?.username === selectedUser || 
-        (Array.isArray(conv.participants) && conv.participants.includes(selectedUser))
-      );
-      
-      if (conversation?.other_user) {
-        setSelectedUserInfo(conversation.other_user);
+  const handleInputChange = (e) => {
+    const value = e.target.value;
+    setDraftMessage(value);
+    
+    if (value.trim()) {
+      startTyping();
       } else {
-        setSelectedUserInfo({ username: selectedUser, full_name: selectedUser, avatar_url: null });
-      }
-    }
-  }, [selectedUser, conversations]);
-
-  // Load messages when user is selected
-  useEffect(() => {
-    if (selectedUser) {
-      fetchMessages(selectedUser);
-    }
-  }, [selectedUser]);
-
-  // Fetch conversations
-  const fetchConversations = async () => {
-    try {
-      const response = await fetch('http://localhost:8000/conversations', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setConversations(data);
-      }
-    } catch (error) {
-      console.error('Error fetching conversations:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  // Fetch messages for selected conversation
-  const fetchMessages = async (username) => {
-    try {
-      const response = await fetch(`http://localhost:8000/conversations/${username}/messages`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setMessages(data);
-        
-        // Mark messages as read
-        await markAsRead(username);
-      }
-    } catch (error) {
-      console.error('Error fetching messages:', error);
-    }
-  };
-  
-  // Mark messages as read
-  const markAsRead = async (username) => {
-    try {
-      await fetch(`http://localhost:8000/conversations/${username}/read`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-    } catch (error) {
-      console.error('Error marking messages as read:', error);
+      stopTyping();
     }
   };
 
-  // Fetch online users
-  const fetchOnlineUsers = async () => {
-    try {
-      const response = await fetch('http://localhost:8000/chat/online-users', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setOnlineUsers(data);
-      }
-    } catch (error) {
-      console.error('Error fetching online users:', error);
-    }
-  };
-
-  // Load initial data
-  useEffect(() => {
-    fetchConversations();
-    fetchOnlineUsers();
-    
-    // Refresh online users every 30 seconds
-    const interval = setInterval(fetchOnlineUsers, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Optimized send message function with useCallback
-  const sendMessage = useCallback(async (messageText) => {
-    if (!messageText?.trim() || !selectedUser || sending) return;
-
-    const tempId = `temp_${Date.now()}`;
-    const tempMessage = {
-      id: tempId,
-      from_user: currentUser.username,
-      to_user: selectedUser,
-      content: messageText.trim(),
-      timestamp: new Date().toISOString(),
-      is_read: false,
-      reply_to: replyingTo?.id || null,
-      reply_content: replyingTo?.content || null,
-      reply_author: replyingTo?.from_user || null,
-      reply_author_display: replyingTo?.from_user === currentUser.username ? 'Bạn' : 
-        (replyingTo?.from_user_info?.full_name || replyingTo?.from_user),
-      is_temp: true
-    };
-
-    try {
-      setSending(true);
-      
-      // Add temp message immediately for instant UI feedback
-      setMessages(prev => [...prev, tempMessage]);
-      setReplyingTo(null);
-
-      const response = await fetch('http://localhost:8000/messages/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          to_user: selectedUser,
-          content: messageText.trim(),
-          reply_to: replyingTo?.id || null
-        }),
-      });
-
-      if (response.ok) {
-        const sentMessage = await response.json();
-        
-        // Replace temp message with real message
-        setMessages(prev => prev.map(msg => 
-          msg.id === tempId ? sentMessage : msg
-        ));
-        
-        // Update conversations list
-        fetchConversations();
-        
-      } else {
-        throw new Error('Failed to send message');
-      }
-    } catch (error) {
-      // Remove temp message on error
-      setMessages(prev => prev.filter(msg => msg.id !== tempId));
-      
-      toast({
-        title: "Lỗi",
-        description: "Không thể gửi tin nhắn",
-        status: "error",
-        duration: 3000,
-        isClosable: true,
-      });
-    } finally {
-      setSending(false);
-    }
-  }, [selectedUser, sending, currentUser, replyingTo, token, toast]);
-
-  // Optimized key press handler
-  const handleKeyPress = useCallback((e) => {
+  const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
-    } else if (e.key === 'Escape') {
-      setReplyingTo(null);
-      setEditingMessage(null);
+      handleSendMessage();
     }
-  }, [sendMessage]);
-
-  // Optimized delete message function
-  const deleteMessage = useCallback(async (messageId) => {
-    if (!confirm('Bạn có chắc chắn muốn thu hồi tin nhắn này?')) return;
-
-    try {
-      const response = await fetch(`http://localhost:8000/messages/${messageId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        setMessages(prev => prev.filter(msg => msg.id !== messageId));
-        
-        toast({
-          title: "Thành công",
-          description: "Tin nhắn đã được thu hồi",
-          status: "success",
-          duration: 3000,
-          isClosable: true,
-        });
-      } else {
-        throw new Error('Failed to delete message');
-      }
-    } catch (error) {
-      toast({
-        title: "Lỗi",
-        description: "Không thể thu hồi tin nhắn",
-        status: "error",
-        duration: 3000,
-        isClosable: true,
-      });
-    }
-  }, [token, toast]);
-
-  // Optimized reply handlers
-  const handleReply = useCallback((message) => {
-    setReplyingTo(message);
-    setEditingMessage(null);
-  }, []);
-
-  const handleCancelReply = useCallback(() => {
-    setReplyingTo(null);
-  }, []);
-
-  // Optimized user selection
-  const selectUser = useCallback((username) => {
-    setSelectedUser(username);
-    setReplyingTo(null);
-    
-    const conversation = conversations.find(conv => 
-      conv.other_user?.username === username || 
-      (Array.isArray(conv.participants) && conv.participants.includes(username))
-    );
-    
-    if (conversation?.other_user) {
-      setSelectedUserInfo(conversation.other_user);
-    } else {
-      setSelectedUserInfo({ username, full_name: username, avatar_url: null });
-    }
-    
-    navigate(`/chat/${username}`);
-  }, [conversations, navigate]);
+  };
 
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
     const now = new Date();
-    const diff = now - date;
+    const diffTime = Math.abs(now - date);
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
-    if (diff < 60000) return 'Vừa xong';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)} phút trước`;
-    if (diff < 86400000) return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+    if (diffDays === 0) {
+      return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } else if (diffDays === 1) {
+      return 'Hôm qua ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } else if (diffDays < 7) {
+      return `${diffDays} ngày trước`;
+    } else {
+      return date.toLocaleDateString('vi-VN', { 
+        day: '2-digit', 
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
   };
 
   const getUnreadCount = (conversation) => {
-    if (!conversation.last_message) return 0;
-    
-    const otherUser = conversation.participants.find(p => p !== currentUser.username);
-    if (conversation.last_message.from_user === currentUser.username) return 0;
-    
-    return conversation.last_message.is_read ? 0 : 1;
+    return conversation.unread_count || 0;
   };
 
-  // Memoized Message Input Component for better performance
-  const MessageInput = React.memo(({ 
-    selectedUser, 
-    replyingTo, 
-    handleCancelReply, 
-    sendMessage, 
-    sending 
-  }) => {
-    const [localMessage, setLocalMessage] = useState('');
-
-    const handleLocalKeyPress = useCallback((e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        if (localMessage.trim() && !sending) {
-          sendMessage(localMessage);
-          setLocalMessage('');
-        }
-      } else if (e.key === 'Escape') {
-        handleCancelReply();
-      }
-    }, [localMessage, sending, sendMessage, handleCancelReply]);
-
-    const handleLocalSend = useCallback(() => {
-      if (localMessage.trim() && !sending) {
-        sendMessage(localMessage);
-        setLocalMessage('');
-      }
-    }, [localMessage, sending, sendMessage]);
+  if (loading && !conversations.length) {
+    return (
+      <Navigation>
+        <Container maxW="8xl" h="calc(100vh - 80px)" py={4}>
+          <Flex h="full" justify="center" align="center">
+            <VStack spacing={4}>
+              <Spinner size="xl" color="blue.500" />
+              <Text color="gray.600">Đang tải cuộc trò chuyện...</Text>
+              
+              {/* Debug info
+              <Box bg="gray.100" p={4} borderRadius="md" fontSize="sm" maxW="500px">
+                <Text fontWeight="bold" mb={2}>Debug Info:</Text>
+                <Text>User: {debugInfo.currentUser}</Text>
+                <Text>Token: {debugInfo.token}</Text>
+                <Text>Socket Connected: {debugInfo.isConnected ? 'Yes' : 'No'}</Text>
+                <Text>Conversations: {debugInfo.conversationsLength}</Text>
+                <Text>Messages: {debugInfo.messagesLength}</Text>
+                <Text>Selected User: {debugInfo.selectedUser || 'None'}</Text>
+                <Text>Loading: {debugInfo.loading ? 'Yes' : 'No'}</Text>
+                {debugInfo.error && <Text color="red.500">Error: {debugInfo.error}</Text>}
+              </Box> */}
+              
+              <Button onClick={() => window.location.reload()}>
+                Tải lại trang
+              </Button>
+            </VStack>
+          </Flex>
+        </Container>
+      </Navigation>
+    );
+  }
 
     return (
-      <Box
-        w="full"
-        borderTop="1px solid"
-        borderColor="gray.200"
-        bg="white"
-        boxShadow="sm"
-      >
-        {/* Reply Preview */}
-        {replyingTo && (
-          <Box
-            px={4}
-            py={3}
-            bg="blue.50"
-            borderBottom="1px solid"
-            borderBottomColor="blue.200"
-          >
-            <HStack justify="space-between" align="start">
-              <VStack align="start" spacing={1} flex={1}>
-                <HStack spacing={2}>
-                  <ArrowForwardIcon color="blue.600" boxSize={3} />
-                  <Text fontSize="sm" fontWeight="semibold" color="blue.600">
-                    Đang trả lời
-                  </Text>
-                  <Text fontSize="sm" color="blue.500">
-                    {replyingTo.from_user_info?.full_name || replyingTo.from_user}
-                  </Text>
-                </HStack>
-                <Text fontSize="sm" color="gray.600" noOfLines={2}>
-                  {replyingTo.content}
-                </Text>
-              </VStack>
-              <IconButton
-                icon={<CloseIcon />}
-                size="xs"
-                variant="ghost"
-                colorScheme="blue"
-                onClick={handleCancelReply}
-                aria-label="Hủy trả lời"
-              />
-            </HStack>
-          </Box>
-        )}
-
-        {/* Input Area */}
-        <Box p={4}>
-          <HStack spacing={3}>
-            <InputGroup size="lg">
-              <Input
-                placeholder={replyingTo ? "Nhập phản hồi... (ESC để hủy)" : "Nhập tin nhắn..."}
-                value={localMessage}
-                onChange={(e) => setLocalMessage(e.target.value)}
-                onKeyPress={handleLocalKeyPress}
-                borderRadius="full"
-                border="2px solid"
-                borderColor={replyingTo ? "blue.300" : "gray.200"}
-                _focus={{
-                  borderColor: 'blue.400',
-                  boxShadow: '0 0 10px rgba(59, 130, 246, 0.2)'
-                }}
-                disabled={sending}
-                resize="none"
-                minH="50px"
-                autoFocus
-              />
-              <InputRightElement width="60px" h="full">
-                <IconButton
-                  icon={<Image src={sendIcon} alt="Send" boxSize="20px" />}
-                  size="md"
-                  borderRadius="full"
-                  colorScheme="blue"
-                  onClick={handleLocalSend}
-                  isLoading={sending}
-                  disabled={!localMessage.trim() || sending}
-                  aria-label="Gửi tin nhắn"
-                />
-              </InputRightElement>
-            </InputGroup>
+    <Navigation>
+      <Container maxW="8xl" h="calc(100vh - 80px)" py={0} px={0}>
+        <Flex h="full" bg={bgColor}>
+          {/* Conversations List */}
+          <Box w="30%" bg={cardBg} borderRight="1px" borderColor={borderColor}>
+            <VStack spacing={0} h="full">
+              {/* Header */}
+              <Box w="full" p={4} borderBottom="1px" borderColor={borderColor}>
+                <HStack justify="space-between">
+                  <Heading size="md" color="blue.600">
+                    💬 Tin nhắn
+                  </Heading>
+                  {unreadCount > 0 && (
+                    <Badge colorScheme="red" variant="solid" borderRadius="full">
+                      {unreadCount}
+                    </Badge>
+                  )}
           </HStack>
         </Box>
-      </Box>
-    );
-  });
-  MessageInput.displayName = 'MessageInput';
 
-  // Memoized conversation item for better performance
-  const ConversationItem = React.memo(({ conversation, isSelected, onSelect, getUnreadCount }) => {
-    const handleClick = useCallback(() => {
-      onSelect(conversation.other_user?.username);
-    }, [conversation.other_user?.username, onSelect]);
+              {/* Conversations */}
+              <Box flex="1" w="full" overflowY="auto">
+                {conversations.length === 0 ? (
+                  <Flex h="full" align="center" justify="center" p={4}>
+                    <VStack spacing={2}>
+                      <Text color="gray.500" textAlign="center">
+                        Chưa có cuộc trò chuyện nào
+                      </Text>
+                      <Text fontSize="sm" color="gray.400" textAlign="center">
+                        Bắt đầu trò chuyện bằng cách nhấn "Liên hệ ngay" từ bài viết
+                </Text>
+              </VStack>
+                  </Flex>
+                ) : (
+                  conversations.map((conversation) => {
+                    const isSelected = selectedUser === conversation.other_user;
+                    const unreadCount = getUnreadCount(conversation);
 
     return (
       <Box
-        p={4}
+                        key={conversation.id}
+                        p={3}
         cursor="pointer"
-        onClick={handleClick}
         bg={isSelected ? 'blue.50' : 'transparent'}
-        borderLeft={isSelected ? '4px solid' : 'none'}
-        borderLeftColor="blue.500"
-        _hover={{ bg: isSelected ? 'blue.50' : 'gray.50' }}
-        transition="all 0.2s ease"
-        borderBottom="1px solid"
-        borderBottomColor="gray.100"
+                        borderLeft={isSelected ? "4px solid" : "4px solid transparent"}
+                        borderColor={isSelected ? 'blue.500' : 'transparent'}
+                        _hover={{ bg: 'gray.50' }}
+                        onClick={() => selectUser(conversation.other_user)}
+                        transition="all 0.2s"
       >
         <HStack spacing={3} align="start">
           <Box position="relative">
             <Avatar
               size="md"
-              name={conversation.other_user?.full_name || conversation.other_user?.username}
-              src={conversation.other_user?.avatar_url ? 
-                `http://localhost:8000${conversation.other_user.avatar_url}` : undefined}
+                              name={safeAvatarName(conversation.other_user_info?.full_name || conversation.other_user)}
+                              src={conversation.other_user_info?.avatar_url}
             />
-            {/* Online status indicator */}
-            <Circle
-              size="12px"
-              bg="green.400"
-              position="absolute"
-              bottom="0"
-              right="0"
-              border="2px solid white"
-              display="none" // Will implement online status later
-            />
+                            {onlineUsers && onlineUsers.has && onlineUsers.has(conversation.other_user) && (
+              <Circle
+                size="12px"
+                bg="green.400"
+                                border="2px solid white"
+                position="absolute"
+                bottom="0"
+                right="0"
+              />
+            )}
           </Box>
 
-          <VStack align="start" spacing={1} flex={1} minW={0}>
+                          <VStack flex="1" align="start" spacing={1}>
             <HStack justify="space-between" w="full">
               <Text
-                fontWeight={getUnreadCount(conversation) > 0 ? "bold" : "semibold"}
+                                fontWeight={unreadCount > 0 ? "bold" : "medium"}
                 fontSize="sm"
-                color="gray.800"
                 noOfLines={1}
               >
-                {conversation.other_user?.full_name || conversation.other_user?.username}
+                                {safeUserName(conversation.other_user_info?.full_name || conversation.other_user)}
               </Text>
               {conversation.last_message && (
-                <Text fontSize="xs" color="gray.500" flexShrink={0}>
-                  {new Date(conversation.last_message.timestamp).toLocaleDateString('vi-VN', { 
-                    day: '2-digit', 
-                    month: '2-digit' 
-                  })}
+                                <Text fontSize="xs" color="gray.500">
+                                  {formatTime(conversation.last_message.timestamp)}
                 </Text>
               )}
             </HStack>
 
-            <HStack justify="space-between" w="full" align="center">
+                            <HStack justify="space-between" w="full">
               <Text
                 fontSize="xs"
-                color={getUnreadCount(conversation) > 0 ? "gray.800" : "gray.500"}
-                fontWeight={getUnreadCount(conversation) > 0 ? "medium" : "normal"}
+                                color="gray.600"
                 noOfLines={1}
-                flex={1}
-              >
-                {conversation.last_message ? 
-                  `${conversation.last_message.from_user === currentUser.username ? 'Bạn: ' : ''}${conversation.last_message.content}` 
-                  : 'Chưa có tin nhắn'}
+                                fontWeight={unreadCount > 0 ? "medium" : "normal"}
+                              >
+                                {conversation.last_message ? (
+                                  conversation.last_message.from_user === currentUser.username 
+                                    ? `Bạn: ${conversation.last_message.content}`
+                                    : conversation.last_message.content
+                                ) : (
+                                  "Chưa có tin nhắn"
+                                )}
               </Text>
-              {getUnreadCount(conversation) > 0 && (
-                <Badge
-                  colorScheme="blue"
-                  borderRadius="full"
-                  fontSize="xs"
-                  minW="20px"
-                  textAlign="center"
-                >
-                  {getUnreadCount(conversation)}
+                              {unreadCount > 0 && (
+                                <Badge colorScheme="red" variant="solid" borderRadius="full" fontSize="xs">
+                                  {unreadCount}
                 </Badge>
               )}
             </HStack>
@@ -660,408 +367,227 @@ const ChatPage = () => {
         </HStack>
       </Box>
     );
-  });
-  ConversationItem.displayName = 'ConversationItem';
-
-  if (loading) {
-    return (
-      <Navigation>
-        <Box h="100vh" bg={bgColor}>
-          <Flex justify="center" align="center" h="full">
-            <VStack spacing={4}>
-              <Spinner size="xl" color="blue.500" />
-              <Text color="gray.600">Đang tải...</Text>
-            </VStack>
-          </Flex>
-        </Box>
-      </Navigation>
-    );
-  }
-
-  return (
-    <Navigation>
-      {/* Chat Interface - Adjusted height for new navbar */}
-      <Box h="calc(100vh - 64px)" bg={bgColor} overflow="hidden">
-        <Card bg={cardBg} shadow="none" borderRadius="0" h="full" overflow="hidden">
-          <CardHeader bg="blue.500" color="white" py={4} px={6}>
-            <HStack spacing={3} align="center">
-              <Image src={chatTrucTiepIcon} alt="Chat" boxSize="32px" />
-              <Heading size="lg" fontWeight="bold">
-                Chat
-              </Heading>
-              <Circle size="12px" bg={wsConnected ? 'green.400' : 'red.400'} />
-            </HStack>
-          </CardHeader>
-
-          <CardBody p={0} h="calc(100vh - 144px)">
-            <Flex h="full">
-              {/* Conversations Sidebar - Wider for better UX */}
-              <Box
-                w={{ base: "100%", md: "400px" }}
-                h="full"
-                borderRight="1px solid"
-                borderColor={borderColor}
-                bg={bgColor}
-                display={{ base: selectedUser ? "none" : "block", md: "block" }}
-              >
-                <VStack spacing={0} h="full">
-                  {/* Sidebar Header */}
-                  <Box w="full" p={4} borderBottom="1px solid" borderColor={borderColor}>
-                    <HStack spacing={3}>
-                      <Image src={danhSachTinNhanIcon} alt="Messages" boxSize="24px" />
-                      <Text fontWeight="bold" color="gray.700" fontSize="lg">
-                        Tin nhắn ({conversations.length})
-                      </Text>
-                    </HStack>
-                  </Box>
-
-                  {/* Conversations List with Enhanced Scrollbar */}
-                  <Box 
-                    w="full" 
-                    flex={1} 
-                    overflowY="auto"
-                    css={{
-                      '&::-webkit-scrollbar': {
-                        width: '8px',
-                      },
-                      '&::-webkit-scrollbar-track': {
-                        background: '#f7fafc',
-                        borderRadius: '8px',
-                        margin: '2px',
-                      },
-                      '&::-webkit-scrollbar-thumb': {
-                        background: 'linear-gradient(180deg, #E2E8F0 0%, #CBD5E0 100%)',
-                        borderRadius: '8px',
-                        border: '1px solid #f7fafc',
-                        backgroundClip: 'padding-box',
-                        transition: 'all 0.3s ease',
-                        '&:hover': {
-                          background: 'linear-gradient(180deg, #CBD5E0 0%, #A0AEC0 100%)',
-                          cursor: 'pointer',
-                        },
-                        '&:active': {
-                          background: 'linear-gradient(180deg, #A0AEC0 0%, #718096 100%)',
-                        },
-                      },
-                      '&::-webkit-scrollbar-corner': {
-                        background: '#f7fafc',
-                      },
-                      // Firefox scrollbar styling
-                      scrollbarWidth: 'thin',
-                      scrollbarColor: '#E2E8F0 #f7fafc',
-                      // Smooth scrolling
-                      scrollBehavior: 'smooth',
-                    }}
-                  >
-                    {conversations.length === 0 ? (
-                      <VStack spacing={4} p={8} color="gray.500">
-                        <Image src={thanhChatIcon} alt="No chat" boxSize="80px" opacity={0.5} />
-                        <Text textAlign="center" fontSize="md">
-                          Chưa có cuộc trò chuyện nào
-                        </Text>
-                        <Text textAlign="center" fontSize="sm" color="gray.400">
-                          Bắt đầu trò chuyện từ các bài đăng
-                        </Text>
-                      </VStack>
-                    ) : (
-                      <VStack spacing={0} align="stretch">
-                        {conversations.map((conversation) => {
-                          // Support both old and new conversation structure
-                          const otherUser = conversation.other_user?.username || conversation.participants?.find(p => p !== currentUser.username);
-                          const otherUserFullName = conversation.other_user?.full_name || otherUser;
-                          const otherUserAvatar = conversation.other_user?.avatar_url;
-                          const isSelected = selectedUser === otherUser;
-                          const unreadCount = getUnreadCount(conversation);
-                          const isOnline = Array.isArray(onlineUsers) && onlineUsers.includes(otherUser);
-                          
-                          return (
-                            <ConversationItem
-                              key={conversation.id || otherUser}
-                              conversation={conversation}
-                              isSelected={isSelected}
-                              onSelect={selectUser}
-                              getUnreadCount={getUnreadCount}
-                            />
-                          );
-                        })}
-                      </VStack>
+                  })
                     )}
                   </Box>
                 </VStack>
               </Box>
 
-              {/* Chat Area - Full width when sidebar is hidden on mobile */}
-              <Box 
-                flex={1} 
-                h="full" 
-                bg="white"
-                display={{ base: selectedUser ? "block" : "none", md: "block" }}
-              >
+          {/* Chat Area */}
+          <Box flex="1" bg={cardBg}>
                 {selectedUser ? (
-                  <VStack spacing={0} h="full">
-                    {/* Chat Header - Enhanced */}
-                    <Box
-                      w="full"
-                      p={4}
-                      borderBottom="1px solid"
-                      borderColor={borderColor}
-                      bg="white"
-                      boxShadow="sm"
-                    >
-                      <HStack spacing={3} align="center">
-                        <Tooltip label="Quay lại danh sách">
+              <VStack h="full" spacing={0}>
+                {/* Chat Header */}
+                <Box w="full" p={4} borderBottom="1px" borderColor={borderColor}>
+                  <HStack justify="space-between">
+                    <HStack spacing={3}>
                           <IconButton
-                            icon={<Image src={leftArrowIcon} alt="Back" boxSize="16px" />}
+                        icon={<ArrowBackIcon />}
                             size="sm"
                             variant="ghost"
-                            onClick={() => {
-                              setSelectedUser(null);
-                              navigate('/chat');
-                            }}
+                        onClick={() => selectUser(null)}
                             display={{ base: 'flex', md: 'none' }}
                           />
-                        </Tooltip>
-                        
-                        <Avatar 
-                          size="md" 
-                          name={selectedUserInfo?.full_name || selectedUser} 
-                          src={selectedUserInfo?.avatar_url ? `http://localhost:8000${selectedUserInfo.avatar_url}` : undefined}
-                          bg="blue.500"
-                        />
-                        <VStack align="start" spacing={0} flex={1}>
-                          <Text fontWeight="bold" fontSize="lg">
-                            {selectedUserInfo?.full_name || selectedUser}
+                          <Avatar 
+                        size="sm"
+                        name={safeAvatarName(selectedUser)}
+                        src={conversations.find(c => c.other_user === selectedUser)?.other_user_info?.avatar_url}
+                      />
+                      <VStack align="start" spacing={0}>
+                        <Text fontWeight="bold" fontSize="sm">
+                          {conversations.find(c => c.other_user === selectedUser)?.other_user_info?.full_name || selectedUser}
                           </Text>
-                                          <Text fontSize="sm" color={(Array.isArray(onlineUsers) && onlineUsers.includes(selectedUser)) ? "green.500" : "gray.500"}>
-                  {(Array.isArray(onlineUsers) && onlineUsers.includes(selectedUser)) ? 
-                              '🟢 Online' : 
-                              '⚫ Offline'
-                            }
-                          </Text>
+                        <Text fontSize="xs" color="gray.500">
+                          {onlineUsers && onlineUsers.has && onlineUsers.has(selectedUser) ? '🟢 Đang online' : '⚫ Offline'}
+                            </Text>
                         </VStack>
-                        
-                        {/* Connection Status */}
-                        {/* <VStack align="end" spacing={0}>
-                          <Circle size="8px" bg={wsConnected ? 'green.400' : 'red.400'} />
-                        </VStack> */}
+                    </HStack>
                       </HStack>
                     </Box>
 
-                    {/* Messages Area - Enhanced scrolling with better scrollbar */}
-                    <Box
-                      flex={1}
-                      w="full"
-                      overflowY="auto"
-                      p={4}
-                      bg="gray.50"
-                      css={{
-                        '&::-webkit-scrollbar': {
-                          width: '12px',
-                        },
-                        '&::-webkit-scrollbar-track': {
-                          background: '#f1f1f1',
-                          borderRadius: '10px',
-                          margin: '5px',
-                        },
-                        '&::-webkit-scrollbar-thumb': {
-                          background: 'linear-gradient(180deg, #CBD5E0 0%, #A0AEC0 100%)',
-                          borderRadius: '10px',
-                          border: '2px solid #f1f1f1',
-                          backgroundClip: 'padding-box',
-                          transition: 'all 0.3s ease',
-                          '&:hover': {
-                            background: 'linear-gradient(180deg, #A0AEC0 0%, #718096 100%)',
-                            cursor: 'pointer',
-                          },
-                          '&:active': {
-                            background: 'linear-gradient(180deg, #718096 0%, #4A5568 100%)',
-                          },
-                        },
-                        '&::-webkit-scrollbar-corner': {
-                          background: '#f1f1f1',
-                        },
-                        // Firefox scrollbar styling
-                        scrollbarWidth: 'thin',
-                        scrollbarColor: '#CBD5E0 #f1f1f1',
-                        // Smooth scrolling
-                        scrollBehavior: 'smooth',
+                {/* Draft Alert */}
+                {showDraftAlert && (
+                  <Alert status="info" borderRadius={0}>
+                    <AlertIcon />
+                    <VStack align="start" spacing={1} flex="1">
+                      <AlertTitle fontSize="sm">Tin nhắn đã soạn sẵn từ bài viết!</AlertTitle>
+                      <AlertDescription fontSize="xs">
+                        Bạn có thể chỉnh sửa tin nhắn bên dưới trước khi gửi.
+                      </AlertDescription>
+                    </VStack>
+                          <IconButton
+                      icon={<CloseIcon />}
+                      size="xs"
+                            variant="ghost"
+                            onClick={() => {
+                        setShowDraftAlert(false);
+                        setDraftPostInfo(null);
                       }}
-                    >
-                      <VStack spacing={3} align="stretch">
-                        {messages.map((message) => {
+                    />
+                  </Alert>
+                )}
+
+                {/* Messages */}
+                <Box flex="1" w="full" overflowY="auto" p={4}>
+                  <VStack spacing={3} align="stretch" h="full">
+                    {loading ? (
+                      <Flex justify="center" align="center" h="full">
+                        <Spinner color="blue.500" />
+                      </Flex>
+                    ) : messages.length === 0 ? (
+                      <Flex justify="center" align="center" h="full">
+                        <VStack spacing={2}>
+                          <Text color="gray.500" textAlign="center">
+                            Chưa có tin nhắn nào
+                                    </Text>
+                          <Text fontSize="sm" color="gray.400" textAlign="center">
+                            Hãy bắt đầu cuộc trò chuyện!
+                                    </Text>
+                        </VStack>
+                      </Flex>
+                    ) : (
+                      messages.map((message, index) => {
                           const isOwn = message.from_user === currentUser.username;
-                          const isTemp = message.is_temp;
-                          const isDeleted = message.is_deleted;
+                        const showTime = index === 0 || 
+                          (new Date(message.timestamp).getTime() - new Date(messages[index - 1].timestamp).getTime()) > 300000; // 5 minutes
                           
                           return (
-                            <Flex
-                              key={message.id}
-                              justify={isOwn ? 'flex-end' : 'flex-start'}
-                              direction="column"
-                              align={isOwn ? 'flex-end' : 'flex-start'}
-                            >
-                              <Box
-                                maxW="75%"
-                                bg={isDeleted ? 'gray.200' : (isOwn ? (isTemp ? 'blue.300' : messageBg) : receivedBg)}
-                                color={isDeleted ? 'gray.500' : (isOwn ? 'white' : 'gray.800')}
-                                px={4}
-                                py={3}
-                                borderRadius="2xl"
-                                borderBottomRightRadius={isOwn ? 'md' : '2xl'}
-                                borderBottomLeftRadius={isOwn ? '2xl' : 'md'}
-                                shadow="sm"
-                                opacity={isTemp ? 0.7 : (isDeleted ? 0.6 : 1)}
-                                position="relative"
-                                transition="all 0.2s ease"
-                                _hover={!isDeleted && !isTemp ? { 
-                                  '& .message-actions': { opacity: 1 },
-                                  transform: 'scale(1.01)',
-                                  shadow: 'md'
-                                } : {}}
-                              >
-                                {/* Reply reference */}
-                                {message.reply_to && message.reply_content && (
-                                  <Box
-                                    bg={isOwn ? 'blue.600' : 'gray.300'}
-                                    color={isOwn ? 'blue.100' : 'gray.600'}
-                                    px={3}
-                                    py={2}
-                                    borderRadius="md"
-                                    mb={2}
-                                    fontSize="xs"
-                                    borderLeft="3px solid"
-                                    borderLeftColor={isOwn ? 'blue.200' : 'gray.500'}
-                                  >
-                                    <Text fontWeight="semibold" mb={1}>
-                                      {message.reply_author === currentUser.username ? 'Bạn' : (message.reply_author_display || message.reply_author)}
+                          <Box key={message.id}>
+                            {showTime && (
+                              <Text fontSize="xs" color="gray.500" textAlign="center" mb={2}>
+                                      {formatTime(message.timestamp)}
+                                        </Text>
+                                      )}
+                            
+                            <Flex justify={isOwn ? 'flex-end' : 'flex-start'} mb={1}>
+                              <Box maxW="70%">
+                                {!isOwn && (
+                                  <Text fontSize="xs" color="gray.500" mb={1}>
+                                    {message.from_user_info?.full_name || message.from_user}
                                     </Text>
-                                    <Text noOfLines={2}>
-                                      {message.reply_content}
-                                    </Text>
-                                  </Box>
                                 )}
-
-                                {/* Message content */}
-                                <Text 
-                                  fontSize="sm" 
-                                  lineHeight="1.4" 
-                                  whiteSpace="pre-wrap"
-                                  fontStyle={isDeleted ? 'italic' : 'normal'}
-                                >
-                                  {isDeleted ? (
-                                    <HStack spacing={2}>
-                                      <DeleteIcon boxSize={3} />
-                                      <Text>Tin nhắn đã được thu hồi</Text>
-                                    </HStack>
-                                  ) : message.content}
-                                </Text>
                                 
-                                {/* Message timestamp */}
-                                <Flex justify="space-between" align="center" mt={1}>
-                                  <Text
-                                    fontSize="xs"
-                                    color={isDeleted ? 'gray.400' : (isOwn ? 'blue.100' : 'gray.500')}
-                                  >
-                                    {formatTime(message.timestamp)}
-                                    {isTemp && (
-                                      <Text as="span" ml={1} opacity={0.7}>
-                                        Đang gửi...
+                                <Box
+                                  bg={isOwn ? messageBg : receivedBg}
+                                  color={isOwn ? 'white' : 'gray.800'}
+                                  px={3}
+                                  py={2}
+                                  borderRadius="lg"
+                                  borderTopLeftRadius={!isOwn ? 'sm' : 'lg'}
+                                  borderTopRightRadius={isOwn ? 'sm' : 'lg'}
+                                  position="relative"
+                                  _hover={{
+                                    '& .message-actions': { opacity: 1 }
+                                  }}
+                                >
+                                  {message.is_deleted ? (
+                                    <Text fontStyle="italic" opacity={0.7}>
+                                      {message.content}
                                       </Text>
+                                  ) : (
+                                    <Text whiteSpace="pre-wrap">{message.content}</Text>
                                     )}
-                                  </Text>
 
-                                  {/* Message actions */}
-                                  {!isDeleted && !isTemp && (
+                                  {/* Message Actions */}
+                                  {isOwn && !message.is_deleted && (
                                     <HStack 
                                       className="message-actions"
-                                      spacing={1}
+                                      position="absolute"
+                                      top="-8px"
+                                      right="0"
                                       opacity={0}
-                                      transition="all 0.2s ease"
-                                      bg="rgba(255, 255, 255, 0.9)"
+                                      transition="opacity 0.2s"
+                                      bg="white"
                                       borderRadius="md"
-                                      px={1}
-                                      py={1}
-                                      backdropFilter="blur(4px)"
-                                      border="1px solid"
-                                      borderColor="gray.200"
+                                      shadow="sm"
+                                      p={1}
                                     >
-                                      <IconButton
-                                        icon={<ArrowForwardIcon />}
-                                        size="xs"
-                                        variant="ghost"
-                                        colorScheme={isOwn ? 'blue' : 'gray'}
-                                        onClick={() => handleReply(message)}
-                                        aria-label="Trả lời"
-                                        _hover={{ 
-                                          bg: isOwn ? 'blue.100' : 'gray.200',
-                                          color: isOwn ? 'blue.600' : 'gray.600',
-                                          transform: 'scale(1.1)'
-                                        }}
-                                        transition="all 0.2s ease"
-                                      />
-                                      {isOwn && (
                                         <IconButton
                                           icon={<DeleteIcon />}
                                           size="xs"
                                           variant="ghost"
                                           colorScheme="red"
-                                          onClick={() => deleteMessage(message.id)}
-                                          aria-label="Thu hồi"
-                                          _hover={{ 
-                                            bg: 'red.100', 
-                                            color: 'red.600',
-                                            transform: 'scale(1.1)'
-                                          }}
-                                          transition="all 0.2s ease"
-                                        />
-                                      )}
+                                        onClick={() => deleteMessage(message.id)}
+                                      />
                                     </HStack>
                                   )}
-                                </Flex>
+                                </Box>
+                                
+                                <Text fontSize="xs" color="gray.400" mt={1} textAlign={isOwn ? 'right' : 'left'}>
+                                  {formatTime(message.timestamp)}
+                                  {isOwn && message.is_read && ' ✓✓'}
+                                </Text>
                               </Box>
                             </Flex>
+                          </Box>
                           );
-                        })}
+                      })
+                    )}
+                        
+                    {/* Typing Indicator */}
+                    {otherUserTyping && (
+                          <Flex justify="flex-start">
+                        <Box bg={receivedBg} px={3} py={2} borderRadius="lg" borderTopLeftRadius="sm">
+                                  <HStack spacing={1}>
+                            <Box w="2" h="2" bg="gray.400" borderRadius="full" animation="pulse 1.5s ease-in-out infinite" />
+                            <Box w="2" h="2" bg="gray.400" borderRadius="full" animation="pulse 1.5s ease-in-out 0.1s infinite" />
+                            <Box w="2" h="2" bg="gray.400" borderRadius="full" animation="pulse 1.5s ease-in-out 0.2s infinite" />
+                              </HStack>
+                            </Box>
+                          </Flex>
+                    )}
+                        
                         <div ref={messagesEndRef} />
                       </VStack>
                     </Box>
 
-                    {/* Message Input - Enhanced with Reply */}
-                    <MessageInput
-                      selectedUser={selectedUser}
-                      replyingTo={replyingTo}
-                      handleCancelReply={handleCancelReply}
-                      sendMessage={sendMessage}
-                      sending={sending}
+                {/* Message Input */}
+                <Box w="full" p={4} borderTop="1px" borderColor={borderColor}>
+                  <HStack spacing={2}>
+                    <Textarea
+                      value={draftMessage}
+                      onChange={handleInputChange}
+                      onKeyPress={handleKeyPress}
+                      placeholder="Nhập tin nhắn..."
+                      resize="none"
+                      minH="40px"
+                      maxH="120px"
+                      bg="gray.50"
+                      border="1px"
+                      borderColor="gray.200"
+                      _focus={{
+                        borderColor: "blue.500",
+                        bg: "white"
+                      }}
                     />
+                    <Button
+                      colorScheme="blue"
+                      size="md"
+                      onClick={handleSendMessage}
+                      isLoading={sending}
+                      loadingText="Gửi"
+                      disabled={!draftMessage.trim() || sending}
+                      leftIcon={<ArrowForwardIcon />}
+                    >
+                      Gửi
+                    </Button>
+                  </HStack>
+                </Box>
                   </VStack>
                 ) : (
-                  <Flex
-                    h="full"
-                    align="center"
-                    justify="center"
-                    direction="column"
-                    color="gray.500"
-                    bg="gray.50"
-                  >
-                    <VStack spacing={6}>
-                      <Image src={thanhChatIcon} alt="Select chat" boxSize="120px" opacity={0.5} />
-                      <Text fontSize="xl" fontWeight="medium">
-                        Chọn một cuộc trò chuyện
-                      </Text>
-                      <Text fontSize="md" textAlign="center" color="gray.400" maxW="300px">
-                        Chọn từ danh sách bên trái để bắt đầu nhắn tin hoặc tìm người dùng từ các bài đăng
+              <Flex h="full" align="center" justify="center">
+                <VStack spacing={4}>
+                  <Image src={chatTrucTiepIcon} alt="Chat" w="100px" opacity={0.5} />
+                  <Text color="gray.500" textAlign="center">
+                    Chọn một cuộc trò chuyện để bắt đầu
                       </Text>
                     </VStack>
                   </Flex>
                 )}
               </Box>
             </Flex>
-          </CardBody>
-        </Card>
-      </Box>
+      </Container>
     </Navigation>
   );
 };
-
 export default ChatPage;

@@ -569,5 +569,4 @@ const AdminPosts = () => {
     </Box>
   );
 };
-
 export default AdminPosts; 

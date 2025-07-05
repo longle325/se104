@@ -62,12 +62,16 @@ import {
 } from 'react-icons/fi';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
+import { useSocket } from '../components/SocketContext';
 import Navigation from '../components/Navigation';
+import ImageGallery from '../components/ImageGallery';
+import { safeAvatarName } from '../utils/avatarUtils';
 
 const PostDetailPage = () => {
   const { postId } = useParams();
   const navigate = useNavigate();
   const { user, getAuthHeader } = useAuth();
+  const { joinPostRoom, leavePostRoom } = useSocket();
   const toast = useToast();
   const { isOpen: isReportOpen, onOpen: onReportOpen, onClose: onReportClose } = useDisclosure();
   
@@ -101,6 +105,43 @@ const PostDetailPage = () => {
     fetchPostDetails();
     fetchComments();
   }, [postId]);
+
+  // Real-time comment updates using SocketContext events
+  useEffect(() => {
+    if (!postId) return;
+    
+    // Join room for this specific post
+    if (joinPostRoom) {
+      joinPostRoom(postId);
+    }
+    
+    const handleNewComment = (event) => {
+      const comment = event.detail;
+      if (comment.post_id === postId) {
+        setComments(prev => [comment, ...prev]);
+      }
+    };
+    
+    const handleDeletedComment = (event) => {
+      const data = event.detail;
+      if (data.post_id === postId) {
+        setComments(prev => prev.filter(c => c.id !== data.comment_id));
+      }
+    };
+    
+    // Add event listeners
+    window.addEventListener('socket:new_comment', handleNewComment);
+    window.addEventListener('socket:deleted_comment', handleDeletedComment);
+    
+    // Leave room on cleanup
+    return () => {
+      if (leavePostRoom) {
+        leavePostRoom(postId);
+      }
+      window.removeEventListener('socket:new_comment', handleNewComment);
+      window.removeEventListener('socket:deleted_comment', handleDeletedComment);
+    };
+  }, [postId, joinPostRoom, leavePostRoom]);
 
   const fetchPostDetails = async () => {
     try {
@@ -257,7 +298,7 @@ const PostDetailPage = () => {
             <HStack>
               <Avatar 
                 size="sm" 
-                name={comment.author_info?.full_name || comment.author}
+                                            name={safeAvatarName(comment.author_info?.full_name || comment.author)}
                 src={comment.author_info?.avatar_url ? `http://localhost:8000${comment.author_info.avatar_url}` : undefined}
                 cursor="pointer"
                 _hover={{ transform: 'scale(1.05)', shadow: 'md' }}
@@ -613,36 +654,27 @@ const PostDetailPage = () => {
 
     try {
       const postLink = window.location.href;
-      const message = `Chào bạn! Tôi quan tâm đến bài đăng "${post.title}" của bạn.\n\n📝 Bài đăng: ${postLink}\n\nCó thể liên hệ để biết thêm chi tiết không?`;
+      const draftMessage = `Chào bạn! Tôi quan tâm đến bài đăng "${post.title}" của bạn.\n\n📝 Bài đăng: ${postLink}\n\nCó thể liên hệ để biết thêm chi tiết không?`;
       
-      const response = await fetch(`http://localhost:8000/conversations/${post.author}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader(),
-        },
-        body: JSON.stringify({
-          to_user: post.author,
-          content: message,
-          post_id: postId,
-          post_link: postLink
-        }),
-      });
-
-      if (response.ok) {
+      // Store draft message in sessionStorage to pass to chat page
+      sessionStorage.setItem('chatDraftMessage', draftMessage);
+      sessionStorage.setItem('chatDraftPostId', postId);
+      sessionStorage.setItem('chatDraftPostLink', postLink);
+      
+      // Navigate to chat with pre-filled message
+      navigate(`/chat/${post.author}?draft=true`);
+      
         toast({
-          title: "Thành công",
-          description: "Tin nhắn đã được gửi",
-          status: "success",
-          duration: 3000,
+        title: "Chuyển hướng",
+        description: "Đang chuyển đến trang chat với tin nhắn đã soạn sẵn",
+        status: "info",
+        duration: 2000,
           isClosable: true,
         });
-        navigate(`/chat/${post.author}`);
-      }
     } catch (error) {
       toast({
         title: "Lỗi",
-        description: "Không thể gửi tin nhắn",
+        description: "Không thể chuyển hướng",
         status: "error",
         duration: 3000,
         isClosable: true,
@@ -848,7 +880,7 @@ const PostDetailPage = () => {
                     <HStack>
                       <Avatar 
                         size="sm" 
-                        name={post.author_info?.full_name || post.author}
+                        name={safeAvatarName(post.author_info?.full_name || post.author)}
                         src={post.author_info?.avatar_url ? `http://localhost:8000${post.author_info.avatar_url}` : undefined}
                       />
                       <Text>
@@ -905,33 +937,10 @@ const PostDetailPage = () => {
               </Box>
 
               <CardBody p={0}>
-                {/* Main Image */}
+                {/* Image Gallery */}
                 {(post.image_urls || post.images) && (post.image_urls || post.images).length > 0 && (
-                  <Box position="relative" bg="gray.100">
-                    <Image
-                      src={`http://localhost:8000${(post.image_urls || post.images)[0]}`}
-                      alt={post.title}
-                      w="full"
-                      h={{ base: "300px", md: "400px" }}
-                      objectFit="contain"
-                      bg="white"
-                    />
-                    
-                    {/* Image Count Badge */}
-                    {(post.image_urls || post.images).length > 1 && (
-                      <Badge
-                        position="absolute"
-                        top={4}
-                        right={4}
-                        bg="blackAlpha.600"
-                        color="white"
-                        px={3}
-                        py={1}
-                        borderRadius="md"
-                      >
-                        {(post.image_urls || post.images).length} ảnh
-                      </Badge>
-                    )}
+                  <Box bg="gray.50" p={4}>
+                    <ImageGallery images={post.image_urls || post.images} title={post.title} />
                   </Box>
                 )}
 
@@ -941,31 +950,6 @@ const PostDetailPage = () => {
                   <Text fontSize="md" lineHeight="1.7" mb={6} color="gray.700">
                     {post.description || post.content}
                   </Text>
-
-                  {/* Additional Images */}
-                  {(post.image_urls || post.images) && (post.image_urls || post.images).length > 1 && (
-                    <Box mb={6}>
-                      <Text fontWeight="semibold" mb={3} color="gray.700">
-                        Hình ảnh khác:
-                      </Text>
-                      <SimpleGrid columns={{ base: 2, md: 3 }} spacing={4}>
-                        {(post.image_urls || post.images).slice(1).map((image, index) => (
-                          <Image
-                            key={index + 1}
-                            src={`http://localhost:8000${image}`}
-                            alt={`${post.title} - Ảnh ${index + 2}`}
-                            borderRadius="md"
-                            h="120px"
-                            w="full"
-                            objectFit="cover"
-                            cursor="pointer"
-                            _hover={{ transform: 'scale(1.02)', shadow: 'md' }}
-                            transition="all 0.2s"
-                          />
-                        ))}
-                      </SimpleGrid>
-                    </Box>
-                  )}
 
                   {/* Action Buttons */}
                   <HStack spacing={3} pt={4} borderTop="1px solid" borderColor={borderColor}>
@@ -1160,5 +1144,4 @@ const PostDetailPage = () => {
     </Navigation>
   );
 };
-
 export default PostDetailPage; 

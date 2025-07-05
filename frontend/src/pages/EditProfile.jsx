@@ -24,6 +24,7 @@ import { useNavigate } from "react-router-dom";
 import { FiCamera, FiSave, FiArrowLeft } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import Navigation from "../components/Navigation";
+import { safeAvatarName } from "../utils/avatarUtils";
 
 const EditProfile = () => {
   const [profile, setProfile] = useState({
@@ -254,7 +255,7 @@ const EditProfile = () => {
                     <Box position="relative">
                       <Avatar
                         size="xl"
-                        name={profile.full_name || profile.username}
+                        name={safeAvatarName(profile.full_name || profile.username)}
                         src={avatarPreview || profile.avatar}
                       />
                       <IconButton

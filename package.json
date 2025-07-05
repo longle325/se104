@@ -1,17 +1,15 @@
 {
-  "name": "tesst-learning",
+  "name": "se104-app",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "UIT Lost & Found Application",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend && python start_servers.py",
+    "frontend": "cd frontend && npm run dev",
+    "backend-simple": "cd backend && python main.py",
+    "install-all": "cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "mongoose": "^8.13.1"
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }

@@ -32,6 +32,7 @@ import { FiPlus, FiSend, FiUpload, FiX, FiImage } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import { useNavigate } from "react-router-dom";
 import Navigation from "../components/Navigation";
+import { API_BASE_URL, CATEGORIES, ITEM_TYPES, LOCATIONS, POST_STATUS } from "../utils/constants";
 
 const Dangtin = () => {
   const [formData, setFormData] = useState({
@@ -57,37 +58,23 @@ const Dangtin = () => {
 
   const bg = useColorModeValue("white", "gray.800");
 
+  // Use constants from utils
   const categories = [
-    { value: "lost", label: "Tìm đồ" },
-    { value: "found", label: "Nhặt được" }
-  ];
-
-  const locations = [
-    { value: "cong_truoc", label: "Cổng trước" },
-    { value: "toa_a", label: "Tòa A" },
-    { value: "toa_b", label: "Tòa B" },
-    { value: "toa_c", label: "Tòa C" },
-    { value: "toa_d", label: "Tòa D" },
-    { value: "toa_e", label: "Tòa E" },
-    { value: "canteen", label: "Căng tin" },
-    { value: "cafe_voi", label: "Cafe Vối" },
-    { value: "san_the_thao", label: "Sân thể thao" },
-    { value: "bai_do_xe", label: "Bãi đỗ xe" },
-    { value: "cong_sau", label: "Cổng sau" },
-    { value: "khac", label: "Khác" }
+    { value: CATEGORIES.LOST.value, label: CATEGORIES.LOST.label },
+    { value: CATEGORIES.FOUND.value, label: CATEGORIES.FOUND.label }
   ];
 
   const itemTypes = [
-    { value: "the_sinh_vien", label: "Thẻ sinh viên" },
-    { value: "vi_giay_to", label: "Ví/Giấy tờ" },
-    { value: "dien_tu", label: "Điện thoại/Tablet/Laptop" },
-    { value: "khac", label: "Đồ vật khác" }
+    { value: ITEM_TYPES.STUDENT_CARD.value, label: ITEM_TYPES.STUDENT_CARD.label },
+    { value: ITEM_TYPES.WALLET_DOCUMENTS.value, label: ITEM_TYPES.WALLET_DOCUMENTS.label },
+    { value: ITEM_TYPES.ELECTRONICS.value, label: ITEM_TYPES.ELECTRONICS.label },
+    { value: ITEM_TYPES.OTHER.value, label: ITEM_TYPES.OTHER.label }
   ];
 
   const handleInputChange = (field, value) => {
     if (field === "location") {
       // Find the location label based on value
-      const selectedLocation = locations.find(loc => loc.value === value);
+      const selectedLocation = LOCATIONS.find(loc => loc.value === value);
       setFormData(prev => ({
         ...prev,
         location: selectedLocation ? selectedLocation.label : value,
@@ -185,7 +172,7 @@ const Dangtin = () => {
         formData.append('files', file);
       });
 
-      const response = await fetch("http://localhost:8000/upload-images", {
+      const response = await fetch(`${API_BASE_URL}/upload-images`, {
         method: "POST",
         headers: getAuthHeader(),
         body: formData,
@@ -249,7 +236,7 @@ const Dangtin = () => {
       delete postData.location_code;
       delete postData.custom_location;
 
-      const response = await fetch("http://localhost:8000/posts", {
+      const response = await fetch(`${API_BASE_URL}/posts`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -259,13 +246,20 @@ const Dangtin = () => {
       });
 
       if (response.ok) {
+        const newPost = await response.json();
+        
+        // Show success message with status info
+        const statusInfo = POST_STATUS[postData.category.toUpperCase()];
+        const defaultStatus = statusInfo ? Object.values(statusInfo)[0] : null;
+        
         toast({
           title: "Thành công",
-          description: "Bài viết đã được đăng thành công",
+          description: `Bài viết đã được đăng với trạng thái "${defaultStatus?.label || 'Đang hoạt động'}"`,
           status: "success",
-          duration: 3000,
+          duration: 4000,
           isClosable: true,
         });
+        
         navigate("/homepage");
       } else {
         const error = await response.json();
@@ -364,7 +358,7 @@ const Dangtin = () => {
                       onChange={(e) => handleInputChange("location", e.target.value)}
                       size="lg"
                     >
-                      {locations.map((loc) => (
+                      {LOCATIONS.map((loc) => (
                         <option key={loc.value} value={loc.value}>
                           {loc.label}
                         </option>

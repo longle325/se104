@@ -32,6 +32,7 @@ import { FiPlus, FiSend, FiUpload, FiX, FiImage } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import { useNavigate, useParams } from "react-router-dom";
 import Navigation from "../components/Navigation";
+import ImageGallery from "../components/ImageGallery";
 
 const EditPost = () => {
   const [formData, setFormData] = useState({
@@ -539,7 +540,7 @@ const EditPost = () => {
                                 borderRadius="md"
                                 objectFit="cover"
                                 w="full"
-                                h="100px"
+                                h="120px"
                               />
                               <IconButton
                                 icon={<FiX />}
@@ -551,6 +552,9 @@ const EditPost = () => {
                                 onClick={() => removeImage(index)}
                                 aria-label="Remove image"
                               />
+                              <Text fontSize="xs" textAlign="center" mt={1} fontWeight="medium">
+                                Ảnh {index + 1}
+                              </Text>
                             </Box>
                           ))}
                         </SimpleGrid>

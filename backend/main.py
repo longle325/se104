@@ -14,8 +14,8 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, HTTPException, Depends, Request, status, BackgroundTasks, WebSocket, WebSocketDisconnect, File, UploadFile
+import asyncio
+from fastapi import FastAPI, HTTPException, Depends, Request, status, BackgroundTasks, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +28,10 @@ from db import db
 from hashing import Hash
 import oauth
 from oauth import get_current_user
+from config import settings, VN_TIMEZONE
+from services.post_service import PostService
+from services.message_service import MessageService
+from websocket_manager import connection_manager, verify_websocket_token
 from models import (
     User, UserRegistration, Login, Token, TokenData, EmailVerification, PasswordResetRequest, 
     VerificationCode, PasswordReset, UserProfile, Post, PostResponse, 
@@ -39,24 +43,12 @@ from models import (
 # Load environment variables
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1200"))
-EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "your_email@gmail.com")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "your_app_password")
-
 # Store verification codes temporarily (in production, use a database)
 verification_codes = {}
 
-# GMT+7 timezone (Vietnam)
-VN_TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
-
-# Admin constants
-ADMIN_CREDENTIALS = {
-    "admin12": "123456"  # In production, use hashed passwords
-}
+# Initialize services
+post_service = PostService()
+message_service = MessageService()
 
 def get_vietnam_time():
     """Get current time in Vietnam timezone (GMT+7)"""
@@ -70,42 +62,8 @@ def get_vietnam_time_naive():
     """Get current time in Vietnam timezone without timezone info (for database storage)"""
     return get_vietnam_time().replace(tzinfo=None)
 
-# WebSocket Connection Manager for Realtime Chat
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-    
-    async def connect(self, websocket: WebSocket, username: str):
-        await websocket.accept()
-        self.active_connections[username] = websocket
-        print(f"User {username} connected. Total connections: {len(self.active_connections)}")
-    
-    def disconnect(self, username: str):
-        if username in self.active_connections:
-            del self.active_connections[username]
-        print(f"User {username} disconnected. Total connections: {len(self.active_connections)}")
-    
-    async def send_personal_message(self, message: str, username: str):
-        if username in self.active_connections:
-            try:
-                await self.active_connections[username].send_text(message)
-                return True
-            except:
-                # Connection might be broken, remove it
-                self.disconnect(username)
-                return False
-        return False
-    
-    async def broadcast_to_conversation(self, message: dict, participants: List[str]):
-        """Send message to all participants in a conversation who are online"""
-        for username in participants:
-            if username in self.active_connections:
-                try:
-                    await self.active_connections[username].send_text(json.dumps(message))
-                except:
-                    self.disconnect(username)
-
-manager = ConnectionManager()
+# WebSocket setup (replaced Socket.IO)
+# Using connection_manager from websocket_manager.py
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -118,14 +76,14 @@ async def lifespan(app: FastAPI):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = get_vietnam_time() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = get_vietnam_time() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire.timestamp()})  # Use timestamp for JWT
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 def verify_token(token: str, credentials_exception):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -145,9 +103,14 @@ def send_email(to_email: str, subject: str, html_content: str, background_tasks:
 
 def _send_email_task(to_email: str, subject: str, html_content: str):
     """Background task to send email"""
+    # Skip email if credentials are not configured
+    if settings.EMAIL_USERNAME == "your_email@gmail.com" or settings.EMAIL_PASSWORD == "your_app_password":
+        print(f"📧 Email skipped (not configured): {to_email} - {subject}")
+        return
+        
     try:
-        gmail_user = EMAIL_USERNAME  # Use environment variable
-        gmail_password = EMAIL_PASSWORD  # Use environment variable
+        gmail_user = settings.EMAIL_USERNAME  # Use environment variable
+        gmail_password = settings.EMAIL_PASSWORD  # Use environment variable
         
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
@@ -159,7 +122,7 @@ def _send_email_task(to_email: str, subject: str, html_content: str):
         message.attach(html_part)
         
         # Create SMTP session
-        server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)  # Use environment variables
+        server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT)  # Use environment variables
         server.starttls()  # Enable security
         server.login(gmail_user, gmail_password)
         text = message.as_string()
@@ -172,6 +135,11 @@ def _send_email_task(to_email: str, subject: str, html_content: str):
 
 def send_message_notification_email(to_email: str, sender_name: str, message_content: str, post_link: str = None, post_title: str = None):
     """Send email notification when someone sends a message"""
+    # Skip email if credentials are not configured
+    if settings.EMAIL_USERNAME == "your_email@gmail.com" or settings.EMAIL_PASSWORD == "your_app_password":
+        print(f"📧 Email notification skipped (not configured): {to_email}")
+        return
+        
     try:
         subject = f"UIT Lost & Found - Bạn có tin nhắn mới từ {sender_name}"
         
@@ -231,7 +199,7 @@ def send_message_notification_email(to_email: str, sender_name: str, message_con
     except Exception as e:
         print(f"Error sending message notification email: {e}")
 
-app = FastAPI(lifespan=lifespan)
+fastapi_app = FastAPI(lifespan=lifespan)
 
 # Create uploads directory if it doesn't exist before mounting
 uploads_dir = "uploads"
@@ -240,28 +208,36 @@ if not os.path.exists(uploads_dir):
 
 origins = [
     "http://localhost:5173",
+    "http://localhost:3050",
     "http://localhost:8000",
+    "https://se104-frontend.vercel.app",  # Add Vercel deployment
+    "http://localhost:3000",  # Common React dev port
+    "http://127.0.0.1:5173",  # Alternative localhost
+    "http://localhost:3001",  # Socket.IO server port (legacy)
 ]
-app.add_middleware(
+
+print(f"🌐 CORS configured for origins: {origins}")
+
+fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=False,  # Set to False when allowing all origins
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 # Mount static files for serving uploaded images
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+fastapi_app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Add exception handlers
-@app.exception_handler(HTTPException)
+@fastapi_app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
     )
 
-@app.exception_handler(Exception)
+@fastapi_app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
     print(f"Unhandled exception: {exc}")
     return JSONResponse(
@@ -296,7 +272,7 @@ def validate_phone(phone: str) -> bool:
     pattern = r"^0\d{9}$"
     return re.fullmatch(pattern, phone) is not None
 
-@app.get("/")
+@fastapi_app.get("/")
 def read_root(current_user: User = Depends(get_current_user)):
     return {"data": "Hello World"}
 
@@ -313,7 +289,7 @@ def load_student_mapping():
         print("Error: Invalid JSON in student_mapping.json")
         return {}
 
-@app.post('/register')
+@fastapi_app.post('/register')
 async def create_user(request: UserRegistration, background_tasks: BackgroundTasks):
     # Load student mapping
     student_mapping = load_student_mapping()
@@ -405,7 +381,7 @@ async def create_user(request: UserRegistration, background_tasks: BackgroundTas
         "full_name": full_name
     }
 
-@app.get('/verify-email', response_class=HTMLResponse)
+@fastapi_app.get('/verify-email', response_class=HTMLResponse)
 async def verify_email(email: str, token: str):
     user = db["User"].find_one({"email": email, "verification_token": token})
     
@@ -439,7 +415,7 @@ async def verify_email(email: str, token: str):
     </html>
     """
 
-@app.post('/login')
+@fastapi_app.post('/login')
 def login(request: Login):
     user = db["User"].find_one({"username": request.username})
     if not user:
@@ -472,7 +448,7 @@ def login(request: Login):
         }
     }
 
-@app.post('/forgot-password')
+@fastapi_app.post('/forgot-password')
 async def forgot_password(request: PasswordResetRequest, background_tasks: BackgroundTasks):
     user = db["User"].find_one({"email": request.email})
     if not user:
@@ -510,7 +486,7 @@ async def forgot_password(request: PasswordResetRequest, background_tasks: Backg
     
     return {"message": "Verification code sent to your email"}
 
-@app.post('/verify-reset-code')
+@fastapi_app.post('/verify-reset-code')
 async def verify_reset_code(verification: VerificationCode):
     if verification.email not in verification_codes:
         raise HTTPException(
@@ -538,7 +514,7 @@ async def verify_reset_code(verification: VerificationCode):
     
     return {"message": "Verification successful"}
 
-@app.post('/reset-password')
+@fastapi_app.post('/reset-password')
 async def reset_password(reset_request: PasswordReset):
     # Verify the code again
     if reset_request.email not in verification_codes:
@@ -583,14 +559,14 @@ async def reset_password(reset_request: PasswordReset):
     
     return {"message": "Password reset successful"}
 
-@app.get("/users")
+@fastapi_app.get("/users")
 def get_users(current_user: User = Depends(get_current_user)):
     users = list(db["User"].find({}, {"password": 0}))  # Exclude password from result
     for user in users:
         user["_id"] = str(user["_id"])  # Convert ObjectId to string if needed
     return users
 
-@app.get("/users/{username}")
+@fastapi_app.get("/users/{username}")
 def get_user(username: str, current_user: User = Depends(get_current_user)):
     user = db["User"].find_one({"username": username}, {"password": 0})
     if not user:
@@ -598,7 +574,7 @@ def get_user(username: str, current_user: User = Depends(get_current_user)):
     user["_id"] = str(user["_id"])
     return user
 
-@app.put("/users/{username}")
+@fastapi_app.put("/users/{username}")
 def update_user(username: str, update_data: User, current_user: User = Depends(get_current_user)):
     user = db["User"].find_one({"username": username})
     if not user:
@@ -623,7 +599,7 @@ def update_user(username: str, update_data: User, current_user: User = Depends(g
     db["User"].update_one({"username": username}, {"$set": update_dict})
     return {"res": "User updated successfully"}
 
-@app.delete("/users/{username}")
+@fastapi_app.delete("/users/{username}")
 def delete_user(username: str, current_user: User = Depends(get_current_user)):
     user = db["User"].find_one({"username": username})
     if not user:
@@ -632,7 +608,7 @@ def delete_user(username: str, current_user: User = Depends(get_current_user)):
     return {"res": "User deleted successfully"}
 
 # User Profile endpoints
-@app.get("/profile/{username}")
+@fastapi_app.get("/profile/{username}")
 def get_user_profile(username: str, current_user: User = Depends(get_current_user)):
     user = db["User"].find_one({"username": username}, {"password": 0})
     if not user:
@@ -676,7 +652,7 @@ def get_user_profile(username: str, current_user: User = Depends(get_current_use
             "created_at": user.get("created_at")
         }
 
-@app.put("/profile/{username}")
+@fastapi_app.put("/profile/{username}")
 def update_user_profile(username: str, profile_data: UserProfile, current_user: User = Depends(get_current_user)):
     if current_user.username != username:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only update your own profile")
@@ -699,7 +675,7 @@ def update_user_profile(username: str, profile_data: UserProfile, current_user: 
     return {"message": "Profile updated successfully"}
 
 # Posts endpoints
-@app.get("/posts")
+@fastapi_app.get("/posts")
 def get_posts(category: Optional[str] = None, limit: int = 20, skip: int = 0):
     filter_dict = {}
     if category:
@@ -751,20 +727,15 @@ def get_posts(category: Optional[str] = None, limit: int = 20, skip: int = 0):
     
     return posts
 
-@app.post("/posts")
-def create_post(post_data: Post, current_user: User = Depends(get_current_user)):
-    post_dict = post_data.dict()
-    post_dict["author"] = current_user.username
-    post_dict["created_at"] = get_vietnam_time_naive()
-    post_dict["view_count"] = 0  # Initialize view count
-    
-    result = db["Post"].insert_one(post_dict)
-    post_dict["id"] = str(result.inserted_id)
-    del post_dict["_id"]
-    
-    return post_dict
+@fastapi_app.post("/posts")
+async def create_post(post_data: Post, current_user: User = Depends(get_current_user)):
+    try:
+        new_post = await post_service.create_post(post_data, current_user.username)
+        return new_post
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@app.get("/posts/{post_id}")
+@fastapi_app.get("/posts/{post_id}")
 def get_post(post_id: str):
     try:
         # Increment view count
@@ -820,7 +791,7 @@ def get_post(post_id: str):
     except:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
-@app.put("/posts/{post_id}")
+@fastapi_app.put("/posts/{post_id}")
 def update_post(post_id: str, post_data: PostUpdate, current_user: User = Depends(get_current_user)):
     try:
         post = db["Post"].find_one({"_id": ObjectId(post_id)})
@@ -839,7 +810,7 @@ def update_post(post_id: str, post_data: PostUpdate, current_user: User = Depend
     except:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
-@app.put("/posts/{post_id}/status")
+@fastapi_app.put("/posts/{post_id}/status")
 def update_post_status(post_id: str, status_data: dict, current_user: User = Depends(get_current_user)):
     try:
         post = db["Post"].find_one({"_id": ObjectId(post_id)})
@@ -873,7 +844,7 @@ def update_post_status(post_id: str, status_data: dict, current_user: User = Dep
             raise e
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
-@app.delete("/posts/{post_id}")
+@fastapi_app.delete("/posts/{post_id}")
 def delete_post(post_id: str, current_user: User = Depends(get_current_user)):
     try:
         post = db["Post"].find_one({"_id": ObjectId(post_id)})
@@ -890,7 +861,7 @@ def delete_post(post_id: str, current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid post ID")
 
 # Chat endpoints - Replace old room-based system with direct messaging
-@app.get("/conversations")
+@fastapi_app.get("/conversations")
 def get_conversations(current_user: User = Depends(get_current_user)):
     """Get all conversations for current user"""
     conversations = list(db["Conversation"].find(
@@ -949,7 +920,7 @@ def get_conversations(current_user: User = Depends(get_current_user)):
         
     return valid_conversations
 
-@app.get("/conversations/{other_username}/messages")
+@fastapi_app.get("/conversations/{other_username}/messages")
 def get_messages(other_username: str, limit: int = 50, skip: int = 0, current_user: User = Depends(get_current_user)):
     """Get messages between current user and another user"""
     participants = sorted([current_user.username, other_username])
@@ -1003,7 +974,7 @@ def get_messages(other_username: str, limit: int = 50, skip: int = 0, current_us
     
     return messages[::-1]  # Return in chronological order
 
-@app.post("/conversations/{other_username}/messages")
+@fastapi_app.post("/conversations/{other_username}/messages")
 async def send_direct_message(other_username: str, message_data: DirectMessage, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """Send a direct message to another user"""
     # Check if other user exists
@@ -1070,9 +1041,22 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
     message_dict["id"] = str(result.inserted_id)
     del message_dict["_id"]
     
-    # Get current user info from database for email
+    # Get current user info from database for email and user info
     current_user_info = db["User"].find_one({"username": current_user.username})
     sender_name = current_user_info.get("full_name", current_user.username) if current_user_info else current_user.username
+    
+    # Add user info to message for frontend
+    message_dict["from_user_info"] = {
+        "username": current_user.username,
+        "full_name": current_user_info.get("full_name") if current_user_info else None,
+        "avatar_url": current_user_info.get("avatar_url") if current_user_info else None
+    }
+    
+    message_dict["to_user_info"] = {
+        "username": other_user["username"],
+        "full_name": other_user.get("full_name"),
+        "avatar_url": other_user.get("avatar_url")
+    }
     
     # Send email notification to recipient
     background_tasks.add_task(
@@ -1090,7 +1074,7 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
     if message_dict.get("post_title"):
         notification_message += f' về bài đăng "{message_dict["post_title"]}"'
     
-    create_notification(
+    await create_notification(
         user_id=other_username,
         notification_type="message",
         title=notification_title,
@@ -1104,20 +1088,26 @@ async def send_direct_message(other_username: str, message_data: DirectMessage, 
         }
     )
 
-    # Send realtime notification to recipient if online
-    await manager.broadcast_to_conversation({
-        "type": "new_message",
-        "message": message_dict
-    }, participants)
+    # Send realtime message via WebSocket
+    # Convert datetime to string for JSON
+    if isinstance(message_dict.get("timestamp"), datetime):
+        message_dict["timestamp"] = message_dict["timestamp"].isoformat()
+
+    print(f"🔥 Backend: Sending message to participants: {participants}")
+    print(f"🔥 Backend: Message data: {message_dict.get('id')} from {message_dict.get('from_user')} to {message_dict.get('to_user')}")
+    print(f"🔥 Backend: Online users: {list(connection_manager.online_users)}")
+    
+    # Use WebSocket connection manager
+    await connection_manager.send_new_message(participants, message_dict)
     
     return message_dict
 
-@app.post("/messages/send")
+@fastapi_app.post("/messages/send")
 async def send_message(message_data: DirectMessage, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """Send a message to another user"""
     return await send_direct_message(message_data.to_user, message_data, background_tasks, current_user)
 
-@app.delete("/messages/{message_id}")
+@fastapi_app.delete("/messages/{message_id}")
 async def delete_message(message_id: str, current_user: User = Depends(get_current_user)):
     """Delete/recall a message (only by sender)"""
     try:
@@ -1145,149 +1135,48 @@ async def delete_message(message_id: str, current_user: User = Depends(get_curre
             {"$set": {"is_deleted": True, "content": "Tin nhắn đã được thu hồi"}}
         )
         
-        # Broadcast deletion to all participants
+        # Broadcast deletion to all participants via WebSocket
         participants = [message["from_user"], message["to_user"]]
-        await manager.broadcast_to_conversation({
+        delete_message = {
             "type": "message_deleted",
             "message_id": message_id,
+            "conversation_id": message.get("conversation_id"),
             "deleted_by": current_user.username
-        }, participants)
+        }
+        
+        for participant in participants:
+            await connection_manager.send_to_user(participant, delete_message)
         
         return {"message": "Message deleted successfully"}
         
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid message ID")
 
-# WebSocket endpoint for realtime chat
-@app.websocket("/ws/{username}")
-async def websocket_endpoint(websocket: WebSocket, username: str):
-    # Verify user authentication through query parameter
-    token = websocket.query_params.get("token")
-    print(f"WebSocket connection attempt for user: {username}")
-    
-    if not token:
-        print(f"Missing token for user: {username}")
-        await websocket.close(code=4001, reason="Missing authentication token")
-        return
-    
-    try:
-        # Verify JWT token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        token_username: str = payload.get("sub")
-        print(f"Token decoded successfully. Token username: {token_username}, URL username: {username}")
-        
-        if token_username != username:
-            print(f"Username mismatch. Token: {token_username}, URL: {username}")
-            await websocket.close(code=4003, reason="Invalid token for user")
-            return
-            
-        # Verify user exists in database
-        user = db["User"].find_one({"username": username})
-        if not user:
-            print(f"User {username} not found in database")
-            await websocket.close(code=4004, reason="User not found")
-            return
-            
-        if not user.get("is_active", False):
-            print(f"User {username} is not active")
-            await websocket.close(code=4005, reason="User account not activated")
-            return
-            
-        print(f"User {username} verified successfully, connecting WebSocket")
-        
-    except JWTError as e:
-        print(f"JWT error for user {username}: {e}")
-        await websocket.close(code=4001, reason="Invalid authentication token")
-        return
-    except Exception as e:
-        print(f"Unexpected error during WebSocket auth for user {username}: {e}")
-        await websocket.close(code=4002, reason="Authentication error")
-        return
-    
-    # Connect user
-    await manager.connect(websocket, username)
-    
-    try:
-        while True:
-            # Keep connection alive and handle incoming messages
-            data = await websocket.receive_text()
-            try:
-                message_data = json.loads(data)
-                
-                if message_data.get("type") == "ping":
-                    # Respond to ping with pong to keep connection alive
-                    await websocket.send_text(json.dumps({"type": "pong"}))
-                
-                elif message_data.get("type") == "send_message":
-                    # Handle message sending through WebSocket
-                    other_username = message_data.get("to_user")
-                    content = message_data.get("content")
-                    
-                    if other_username and content:
-                        # Check if other user exists
-                        other_user = db["User"].find_one({"username": other_username})
-                        if other_user:
-                            participants = sorted([username, other_username])
-                            
-                            # Find or create conversation
-                            conversation = db["Conversation"].find_one({"participants": participants})
-                            if not conversation:
-                                conversation_data = {
-                                    "participants": participants,
-                                    "created_at": get_vietnam_time_naive(),
-                                    "updated_at": get_vietnam_time_naive()
-                                }
-                                result = db["Conversation"].insert_one(conversation_data)
-                                conversation_id = str(result.inserted_id)
-                            else:
-                                conversation_id = str(conversation["_id"])
-                                # Update conversation timestamp
-                                db["Conversation"].update_one(
-                                    {"_id": conversation["_id"]},
-                                    {"$set": {"updated_at": get_vietnam_time_naive()}}
-                                )
-                            
-                            # Create message
-                            message_dict = {
-                                "conversation_id": conversation_id,
-                                "from_user": username,
-                                "to_user": other_username,
-                                "content": content,
-                                "timestamp": get_vietnam_time_naive(),
-                                "is_read": False
-                            }
-                            
-                            result = db["DirectMessage"].insert_one(message_dict)
-                            message_dict["id"] = str(result.inserted_id)
-                            del message_dict["_id"]
-                            
-                            # Broadcast to all participants
-                            await manager.broadcast_to_conversation({
-                                "type": "new_message",
-                                "message": message_dict
-                            }, participants)
-                        
-            except json.JSONDecodeError:
-                await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
-            except Exception as e:
-                print(f"Error handling websocket message: {e}")
-                await websocket.send_text(json.dumps({"type": "error", "message": "Server error"}))
-                
-    except WebSocketDisconnect:
-        manager.disconnect(username)
-        print(f"User {username} disconnected from WebSocket")
-    except Exception as e:
-        print(f"WebSocket error for user {username}: {e}")
-        manager.disconnect(username)
-
 # Get online users
-@app.get("/chat/online-users")
-def get_online_users(current_user: User = Depends(get_current_user)):
-    """Get list of currently online users"""
-    return list(manager.active_connections.keys())
+@fastapi_app.get("/chat/online-users")
+def get_online_users_endpoint(current_user: User = Depends(get_current_user)):
+    """Get list of currently online users with additional info"""
+    online_usernames = list(connection_manager.online_users)
+    
+    # Get user details for online users
+    online_users_details = []
+    for username in online_usernames:
+        user = db["User"].find_one({"username": username}, {"username": 1, "full_name": 1, "avatar": 1})
+        if user:
+            online_users_details.append({
+                "username": user["username"],
+                "full_name": user.get("full_name", ""),
+                "avatar": user.get("avatar", ""),
+                "status": "online"
+            })
+    
+    return {
+        "online_users": online_users_details,
+        "total_count": len(online_users_details)
+    }
 
 # Mark messages as read
-@app.put("/conversations/{other_username}/read")
+@fastapi_app.put("/conversations/{other_username}/read")
 def mark_messages_read(other_username: str, current_user: User = Depends(get_current_user)):
     """Mark all messages from other user as read"""
     participants = sorted([current_user.username, other_username])
@@ -1305,7 +1194,7 @@ def mark_messages_read(other_username: str, current_user: User = Depends(get_cur
     
     return {"message": "Messages marked as read"}
 
-@app.get("/messages/unread-count")
+@fastapi_app.get("/messages/unread-count")
 def get_unread_messages_count(current_user: User = Depends(get_current_user)):
     """Get total count of unread messages for current user"""
     count = db["DirectMessage"].count_documents({
@@ -1314,8 +1203,19 @@ def get_unread_messages_count(current_user: User = Depends(get_current_user)):
     })
     return {"unread_count": count}
 
+@fastapi_app.get("/debug/websocket-status")
+def get_websocket_debug_status(current_user: User = Depends(get_current_user)):
+    """Debug endpoint to check WebSocket status"""
+    return {
+        "online_users": list(connection_manager.online_users),
+        "total_online": len(connection_manager.online_users),
+        "current_user_online": connection_manager.is_user_online(current_user.username),
+        "connection_info": connection_manager.get_connection_info(),
+        "message": "Check backend logs for detailed WebSocket connection information"
+    }
+
 # Image upload endpoint for new posts
-@app.post("/upload-images")
+@fastapi_app.post("/upload-images")
 async def upload_images(files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
     try:
         uploaded_files = []
@@ -1339,7 +1239,7 @@ async def upload_images(files: List[UploadFile] = File(...), current_user: User 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload images")
 
 # Avatar upload endpoint
-@app.post("/upload-avatar")
+@fastapi_app.post("/upload-avatar")
 async def upload_avatar(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     try:
         # Validate file type
@@ -1374,7 +1274,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: User = Depen
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload avatar")
 
 # Report Posts
-@app.post("/posts/{post_id}/report")
+@fastapi_app.post("/posts/{post_id}/report")
 def report_post(post_id: str, report_data: PostReport, current_user: User = Depends(get_current_user)):
     """Report a post for inappropriate content"""
     # Check if post exists
@@ -1410,7 +1310,7 @@ def report_post(post_id: str, report_data: PostReport, current_user: User = Depe
     
     return {"message": "Report submitted successfully", "report": report_dict}
 
-@app.get("/posts/{post_id}/reports")
+@fastapi_app.get("/posts/{post_id}/reports")
 def get_post_reports(post_id: str, current_user: User = Depends(get_current_user)):
     """Get reports for a specific post (admin only)"""
     # Only allow admin users to view reports
@@ -1425,7 +1325,7 @@ def get_post_reports(post_id: str, current_user: User = Depends(get_current_user
     return reports
 
 # Comments System
-@app.get("/posts/{post_id}/comments")
+@fastapi_app.get("/posts/{post_id}/comments")
 def get_post_comments(post_id: str, limit: int = 50, skip: int = 0):
     """Get comments for a specific post"""
     try:
@@ -1462,8 +1362,8 @@ def get_post_comments(post_id: str, limit: int = 50, skip: int = 0):
     
     return comments
 
-@app.post("/posts/{post_id}/comments")
-def create_comment(post_id: str, comment_data: Comment, current_user: User = Depends(get_current_user)):
+@fastapi_app.post("/posts/{post_id}/comments")
+async def create_comment(post_id: str, comment_data: Comment, current_user: User = Depends(get_current_user)):
     """Create a new comment on a post"""
     try:
         # Check if post exists
@@ -1546,7 +1446,7 @@ def create_comment(post_id: str, comment_data: Comment, current_user: User = Dep
         commenter_info = db["User"].find_one({"username": current_user.username})
         commenter_name = commenter_info.get("full_name", current_user.username) if commenter_info else current_user.username
         
-        create_notification(
+        await create_notification(
             user_id=post["author"],
             notification_type="comment",
             title="Bình luận mới",
@@ -1559,9 +1459,24 @@ def create_comment(post_id: str, comment_data: Comment, current_user: User = Dep
             }
         )
     
+    # Emit new comment event for real-time updates via WebSocket
+    # Convert datetime to string for JSON  
+    if isinstance(comment_dict.get("created_at"), datetime):
+        comment_dict["created_at"] = comment_dict["created_at"].isoformat()
+    if isinstance(comment_dict.get("updated_at"), datetime):
+        comment_dict["updated_at"] = comment_dict["updated_at"].isoformat()
+    
+    # Broadcast to post room
+    comment_message = {
+        "type": "new_comment",
+        "comment": comment_dict,
+        "post_id": post_id
+    }
+    await connection_manager.broadcast_to_room(f'post_{post_id}', comment_message)
+    
     return comment_dict
 
-@app.delete("/posts/{post_id}/comments/{comment_id}")
+@fastapi_app.delete("/posts/{post_id}/comments/{comment_id}")
 def delete_comment(post_id: str, comment_id: str, current_user: User = Depends(get_current_user)):
     """Delete a comment (only by author or admin)"""
     try:
@@ -1591,9 +1506,17 @@ def delete_comment(post_id: str, comment_id: str, current_user: User = Depends(g
             if deep_replies:
                 db["Comment"].delete_many({"parent_id": reply_id})
     
+    # Broadcast comment deletion via WebSocket
+    delete_comment_message = {
+        "type": "deleted_comment", 
+        "comment_id": comment_id,
+        "post_id": post_id
+    }
+    asyncio.create_task(connection_manager.broadcast_to_room(f'post_{post_id}', delete_comment_message))
+
     return {"message": "Comment and all replies deleted successfully"}
 
-@app.post("/comments/{comment_id}/report")
+@fastapi_app.post("/comments/{comment_id}/report")
 def report_comment(comment_id: str, report_data: CommentReport, current_user: User = Depends(get_current_user)):
     """Report a comment"""
     try:
@@ -1640,7 +1563,7 @@ def report_comment(comment_id: str, report_data: CommentReport, current_user: Us
     return {"message": "Comment report submitted successfully", "report": report_dict}
 
 # Get similar posts (recommendation algorithm)
-@app.get("/posts/{post_id}/similar")
+@fastapi_app.get("/posts/{post_id}/similar")
 def get_similar_posts(post_id: str, limit: int = 5):
     """Get similar posts based on content, category, location, and item type"""
     try:
@@ -1735,7 +1658,7 @@ def get_similar_posts(post_id: str, limit: int = 5):
     return similar_posts
 
 # Notifications API
-@app.get("/notifications")
+@fastapi_app.get("/notifications")
 def get_notifications(limit: int = 50, skip: int = 0, current_user: User = Depends(get_current_user)):
     """Get notifications for current user"""
     notifications = list(db["Notification"].find({
@@ -1751,7 +1674,7 @@ def get_notifications(limit: int = 50, skip: int = 0, current_user: User = Depen
     
     return notifications
 
-@app.get("/notifications/unread-count")
+@fastapi_app.get("/notifications/unread-count")
 def get_unread_notifications_count(current_user: User = Depends(get_current_user)):
     """Get count of unread notifications"""
     count = db["Notification"].count_documents({
@@ -1760,7 +1683,7 @@ def get_unread_notifications_count(current_user: User = Depends(get_current_user
     })
     return {"unread_count": count}
 
-@app.put("/notifications/{notification_id}/read")
+@fastapi_app.put("/notifications/{notification_id}/read")
 def mark_notification_read(notification_id: str, current_user: User = Depends(get_current_user)):
     """Mark a notification as read"""
     try:
@@ -1779,7 +1702,7 @@ def mark_notification_read(notification_id: str, current_user: User = Depends(ge
     except:
         raise HTTPException(status_code=400, detail="Invalid notification ID")
 
-@app.put("/notifications/read-all")
+@fastapi_app.put("/notifications/read-all")
 def mark_all_notifications_read(current_user: User = Depends(get_current_user)):
     """Mark all notifications as read for current user"""
     result = db["Notification"].update_many(
@@ -1789,8 +1712,54 @@ def mark_all_notifications_read(current_user: User = Depends(get_current_user)):
     
     return {"message": f"Marked {result.modified_count} notifications as read"}
 
-def create_notification(user_id: str, notification_type: str, title: str, message: str, related_post_id: str = None, related_user: str = None, data: dict = None):
-    """Create a new notification for a user"""
+@fastapi_app.post("/admin/update-post-status")
+def update_existing_post_status(current_user: User = Depends(get_current_user)):
+    """Update status for existing posts that don't have proper status"""
+    try:
+        # Check if user is admin
+        if current_user.get("username") != settings.ADMIN_USERNAME:
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Update lost posts without status or with 'active' status
+        lost_result = db["Post"].update_many(
+            {
+                "category": "lost", 
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": "active"},
+                    {"status": None}
+                ]
+            },
+            {"$set": {"status": "not_found"}}
+        )
+        
+        # Update found posts without status or with 'active' status  
+        found_result = db["Post"].update_many(
+            {
+                "category": "found",
+                "$or": [
+                    {"status": {"$exists": False}},
+                    {"status": "active"}, 
+                    {"status": None}
+                ]
+            },
+            {"$set": {"status": "not_returned"}}
+        )
+        
+        return {
+            "message": "Status update completed",
+            "lost_posts_updated": lost_result.modified_count,
+            "found_posts_updated": found_result.modified_count,
+            "total_updated": lost_result.modified_count + found_result.modified_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+async def create_notification(user_id: str, notification_type: str, title: str, message: str, related_post_id: str = None, related_user: str = None, data: dict = None):
+    """Create a new notification for a user and send via Socket.IO if online"""
     try:
         notification_data = {
             "user_id": user_id,
@@ -1805,9 +1774,56 @@ def create_notification(user_id: str, notification_type: str, title: str, messag
         }
         
         result = db["Notification"].insert_one(notification_data)
+        notification_id = str(result.inserted_id)
         
-        print(f"Created notification for user {user_id}: {title}")
-        return str(result.inserted_id)
+        # Add ID to notification data for Socket.IO
+        notification_data["id"] = notification_id
+        notification_data["created_at"] = notification_data["created_at"].isoformat()
+        if "_id" in notification_data:
+            del notification_data["_id"]
+        
+        # Send via WebSocket to the user
+        await connection_manager.send_notification(user_id, notification_data)
+        print(f"Sent real-time notification to user {user_id}: {title}")
+        
+        return notification_id
+        
+    except Exception as e:
+        print(f"Error creating notification: {e}")
+        return None
+
+# Helper function for non-async contexts
+def create_notification_sync(user_id: str, notification_type: str, title: str, message: str, related_post_id: str = None, related_user: str = None, data: dict = None):
+    """Synchronous wrapper for create_notification - for backward compatibility.
+       This now uses sio.start_background_task for non-async contexts.
+    """
+    try:
+        notification_data = {
+            "user_id": user_id,
+            "type": notification_type,
+            "title": title,
+            "message": message,
+            "related_post_id": related_post_id,
+            "related_user": related_user,
+            "data": data or {},
+            "created_at": get_vietnam_time_naive(),
+            "is_read": False
+        }
+        
+        result = db["Notification"].insert_one(notification_data)
+        notification_id = str(result.inserted_id)
+        
+        # Prepare data for real-time emission
+        notification_data["id"] = notification_id
+        notification_data["created_at"] = notification_data["created_at"].isoformat()
+        if "_id" in notification_data:
+            del notification_data["_id"]
+        
+        # Use WebSocket connection manager to send notification
+        asyncio.create_task(connection_manager.send_notification(user_id, notification_data))
+        print(f"Queued real-time notification for user {user_id}: {title}")
+        
+        return notification_id
         
     except Exception as e:
         print(f"Error creating notification: {e}")
@@ -1816,7 +1832,7 @@ def create_notification(user_id: str, notification_type: str, title: str, messag
 # Admin helper functions
 def verify_admin_credentials(username: str, password: str) -> bool:
     """Verify admin credentials"""
-    return ADMIN_CREDENTIALS.get(username) == password
+    return settings.ADMIN_CREDENTIALS.get(username) == password
 
 def get_current_admin(token: str = Depends(oauth.oauth2_scheme)):
     """Verify admin token and return admin info"""
@@ -1827,7 +1843,7 @@ def get_current_admin(token: str = Depends(oauth.oauth2_scheme)):
     )
     
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
         is_admin: bool = payload.get("is_admin", False)
         
@@ -1835,7 +1851,7 @@ def get_current_admin(token: str = Depends(oauth.oauth2_scheme)):
             raise credentials_exception
             
         # Verify admin still exists in our credentials
-        if username not in ADMIN_CREDENTIALS:
+        if username not in settings.ADMIN_CREDENTIALS:
             raise credentials_exception
             
         return {"username": username, "is_admin": True}
@@ -1863,7 +1879,7 @@ def log_admin_action(admin_username: str, action: str, target_type: str, target_
 
 # ===== ADMIN ENDPOINTS =====
 
-@app.post('/admin/login')
+@fastapi_app.post('/admin/login')
 def admin_login(request: AdminLogin):
     """Admin login endpoint"""
     try:
@@ -1886,7 +1902,7 @@ def admin_login(request: AdminLogin):
         print(f"Admin login error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get('/admin/dashboard/stats')
+@fastapi_app.get('/admin/dashboard/stats')
 def get_admin_dashboard_stats(current_admin: dict = Depends(get_current_admin)):
     """Get dashboard statistics for admin"""
     try:
@@ -1928,7 +1944,7 @@ def get_admin_dashboard_stats(current_admin: dict = Depends(get_current_admin)):
         print(f"Error getting dashboard stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to get dashboard statistics")
 
-@app.get('/admin/users')
+@fastapi_app.get('/admin/users')
 def get_admin_users(
     limit: int = 50, 
     skip: int = 0,
@@ -1999,7 +2015,7 @@ def get_admin_users(
         print(f"Error getting admin users: {e}")
         raise HTTPException(status_code=500, detail="Failed to get users")
 
-@app.post('/admin/users/{username}/ban')
+@fastapi_app.post('/admin/users/{username}/ban')
 def ban_user(
     username: str, 
     ban_data: UserBan,
@@ -2040,7 +2056,7 @@ def ban_user(
         )
         
         # Send notification to user
-        create_notification(
+        create_notification_sync(
             username,
             "system",
             "Tài khoản bị khóa",
@@ -2055,7 +2071,7 @@ def ban_user(
         print(f"Error banning user: {e}")
         raise HTTPException(status_code=500, detail="Failed to ban user")
 
-@app.post('/admin/users/{username}/unban')
+@fastapi_app.post('/admin/users/{username}/unban')
 def unban_user(username: str, current_admin: dict = Depends(get_current_admin)):
     """Unban a user"""
     try:
@@ -2083,7 +2099,7 @@ def unban_user(username: str, current_admin: dict = Depends(get_current_admin)):
         log_admin_action(current_admin["username"], "unban_user", "user", username)
         
         # Send notification to user
-        create_notification(
+        create_notification_sync(
             username,
             "system",
             "Tài khoản được khôi phục",
@@ -2098,7 +2114,7 @@ def unban_user(username: str, current_admin: dict = Depends(get_current_admin)):
         print(f"Error unbanning user: {e}")
         raise HTTPException(status_code=500, detail="Failed to unban user")
 
-@app.post('/admin/users/{username}/mute')
+@fastapi_app.post('/admin/users/{username}/mute')
 def mute_user(
     username: str, 
     mute_data: UserMute,
@@ -2137,7 +2153,7 @@ def mute_user(
         )
         
         # Send notification to user
-        create_notification(
+        create_notification_sync(
             username,
             "system",
             "Bị hạn chế bình luận",
@@ -2152,7 +2168,7 @@ def mute_user(
         print(f"Error muting user: {e}")
         raise HTTPException(status_code=500, detail="Failed to mute user")
 
-@app.get('/admin/posts')
+@fastapi_app.get('/admin/posts')
 def get_admin_posts(
     limit: int = 50,
     skip: int = 0,
@@ -2246,7 +2262,7 @@ def get_admin_posts(
         print(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to get posts: {str(e)}")
 
-@app.delete('/admin/posts/{post_id}')
+@fastapi_app.delete('/admin/posts/{post_id}')
 def admin_delete_post(
     post_id: str,
     reason: Optional[str] = None,
@@ -2277,7 +2293,7 @@ def admin_delete_post(
         )
         
         # Send notification to post author
-        create_notification(
+        create_notification_sync(
             post["author"],
             "system",
             "Bài viết bị xóa",
@@ -2292,7 +2308,7 @@ def admin_delete_post(
         print(f"Error deleting post: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete post")
 
-@app.get('/admin/reports')
+@fastapi_app.get('/admin/reports')
 def get_admin_reports(
     limit: int = 50,
     skip: int = 0,
@@ -2348,7 +2364,7 @@ def get_admin_reports(
         print(f"Error getting admin reports: {e}")
         raise HTTPException(status_code=500, detail="Failed to get reports")
 
-@app.post('/admin/reports/{report_id}/action')
+@fastapi_app.post('/admin/reports/{report_id}/action')
 def handle_report_action(
     report_id: str,
     action_data: ReportAction,
@@ -2372,7 +2388,7 @@ def handle_report_action(
             db["Comment"].delete_many({"post_id": report["post_id"]})
             
             # Notify post author
-            create_notification(
+            create_notification_sync(
                 post["author"],
                 "system",
                 "Bài viết bị xóa",
@@ -2381,7 +2397,7 @@ def handle_report_action(
             
         elif action_data.action == "warn_user":
             # Send warning to post author
-            create_notification(
+            create_notification_sync(
                 post["author"],
                 "system",
                 "Cảnh báo vi phạm",
@@ -2419,6 +2435,103 @@ def handle_report_action(
         print(f"Error handling report action: {e}")
         raise HTTPException(status_code=500, detail="Failed to handle report action")
 
+# ===== WebSocket Endpoint =====
+@fastapi_app.websocket("/ws/{username}")
+async def websocket_endpoint(websocket: WebSocket, username: str, token: str = None):
+    """WebSocket endpoint for real-time communication"""
+    
+    # Verify token
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+    
+    verified_username = verify_websocket_token(token)
+    if not verified_username or verified_username != username:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+    
+    # Verify user exists and is active
+    user = db["User"].find_one({"username": username})
+    if not user or not user.get("is_active", False):
+        await websocket.close(code=4002, reason="User not found or inactive")
+        return
+    
+    # Connect user via connection manager
+    await connection_manager.connect(websocket, username)
+    
+    try:
+        while True:
+            # Listen for incoming messages
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            message_type = message.get("type")
+            
+            if message_type == "pong":
+                # Client response to ping - update last ping time
+                if username in connection_manager.active_connections:
+                    connection_manager.active_connections[username]['last_ping'] = datetime.now()
+                    
+            elif message_type == "join_post_room":
+                # Join post room for real-time comments
+                post_id = message.get("post_id")
+                if post_id:
+                    await connection_manager.join_room(username, f"post_{post_id}")
+                    
+            elif message_type == "leave_post_room":
+                # Leave post room
+                post_id = message.get("post_id") 
+                if post_id:
+                    await connection_manager.leave_room(username, f"post_{post_id}")
+                    
+            elif message_type == "typing_start":
+                # Handle typing indicators
+                conversation_id = message.get("conversation_id")
+                other_user = message.get("other_user")
+                if conversation_id and other_user:
+                    await connection_manager.handle_typing_start(username, conversation_id, other_user)
+                    
+            elif message_type == "typing_stop":
+                # Handle typing stop
+                conversation_id = message.get("conversation_id")
+                other_user = message.get("other_user")
+                if conversation_id and other_user:
+                    await connection_manager.handle_typing_stop(username, conversation_id, other_user)
+                    
+            elif message_type == "mark_message_read":
+                # Mark message as read
+                message_id = message.get("message_id")
+                if message_id:
+                    try:
+                        result = db["DirectMessage"].update_one(
+                            {"_id": ObjectId(message_id), "to_user": username},
+                            {"$set": {"is_read": True, "read_at": get_vietnam_time_naive()}}
+                        )
+                        
+                        if result.modified_count > 0:
+                            # Notify sender
+                            msg = db["DirectMessage"].find_one({"_id": ObjectId(message_id)})
+                            if msg:
+                                read_notification = {
+                                    "type": "message_read",
+                                    "message_id": message_id,
+                                    "read_by": username,
+                                    "read_at": get_vietnam_time_naive().isoformat()
+                                }
+                                await connection_manager.send_to_user(msg['from_user'], read_notification)
+                    except Exception as e:
+                        print(f"Error marking message as read: {e}")
+                        
+    except WebSocketDisconnect:
+        # Handle disconnect
+        await connection_manager.disconnect(username)
+
+
+# Main FastAPI app (now with WebSocket support)
+app = fastapi_app
+
 if __name__ == "__main__":
     import uvicorn
+    
+    print("🚀 Starting FastAPI server with WebSocket support on port 8000...")
+    print("💡 WebSocket endpoint: ws://localhost:8000/ws/{username}?token={token}")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

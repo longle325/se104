@@ -22,6 +22,7 @@ import { useState, useEffect } from "react";
 import logoImage from "../assets/auth/logo.png";
 import NotificationCenter from "./NotificationCenter";
 import MessageCenter from "./MessageCenter";
+import { safeAvatarName } from "../utils/avatarUtils";
 
 const Navigation = ({ children }) => {
   const navigate = useNavigate();
@@ -115,7 +116,7 @@ const Navigation = ({ children }) => {
                   leftIcon={
                     <Avatar 
                       size="sm" 
-                      name={user?.full_name || user?.username} 
+                                              name={safeAvatarName(user?.full_name || user?.username)} 
                       src={user?.avatar_url ? `http://localhost:8000${user.avatar_url}` : undefined}
                       w="32px"
                       h="32px"

@@ -292,7 +292,7 @@ const AdminUsers = () => {
                             <HStack spacing={3}>
                               <Avatar
                                 size="md"
-                                name={user.full_name || user.username}
+                                name={user.full_name || user.username || 'User'}
                                 src={user.avatar_url}
                               />
                               <VStack align="start" spacing={1}>

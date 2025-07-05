@@ -6,7 +6,8 @@ const rootElement = document.getElementById("root");
 const root = createRoot(rootElement);
 
 root.render(
-  <React.StrictMode>
+  // Temporarily disable StrictMode to prevent socket disconnection issues
+  // <React.StrictMode>
     <App />
-  </React.StrictMode>
+  // </React.StrictMode>
 );

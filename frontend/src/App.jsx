@@ -1,6 +1,8 @@
 import { ChakraProvider } from "@chakra-ui/react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./components/AuthContext";
+import SocketProvider from "./components/SocketContext";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ProtectedRoute from "./components/ProtectedRoute";
 import LoginPage from "./LoginPage";
 import RegisterPage from "./RegisterPage";
@@ -29,6 +31,7 @@ function App() {
   return (
     <ChakraProvider>
       <AuthProvider>
+        <SocketProvider>
         <Router>
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
@@ -122,6 +125,7 @@ function App() {
             <Route path="/admin/settings" element={<AdminSettings />} />
           </Routes>
         </Router>
+        </SocketProvider>
       </AuthProvider>
     </ChakraProvider>
   );

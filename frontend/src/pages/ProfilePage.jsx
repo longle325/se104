@@ -46,6 +46,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { FiEdit, FiCalendar, FiExternalLink, FiTrash2, FiEye, FiMapPin, FiClock, FiMessageCircle } from "react-icons/fi";
 import { useAuth } from "../components/AuthContext";
 import Navigation from "../components/Navigation";
+import ImageGallery from "../components/ImageGallery";
 
 const ProfilePage = () => {
   const [profile, setProfile] = useState(null);
@@ -291,7 +292,10 @@ const ProfilePage = () => {
                   <Avatar 
                     size="2xl" 
                     name={profile?.full_name || profile?.username || "User"}
-                    src={isOwnProfile ? (user?.avatar_url || undefined) : (profile?.avatar_url || undefined)}
+                    src={isOwnProfile ? 
+                      (user?.avatar_url ? `http://localhost:8000${user.avatar_url}` : undefined) : 
+                      (profile?.avatar_url ? `http://localhost:8000${profile.avatar_url}` : undefined)
+                    }
                   />
                   <VStack spacing={1}>
                     <Heading size="lg">
@@ -566,21 +570,9 @@ const ProfilePage = () => {
           <ModalBody pb={6}>
             {selectedPost && (
               <VStack spacing={4} align="stretch">
-                {/* Images */}
+                {/* Images Gallery */}
                 {selectedPost.image_urls && selectedPost.image_urls.length > 0 && (
-                  <SimpleGrid columns={selectedPost.image_urls.length === 1 ? 1 : 2} spacing={2}>
-                    {selectedPost.image_urls.map((imageUrl, index) => (
-                      <Image
-                        key={index}
-                        src={`http://localhost:8000${imageUrl}`}
-                        alt={`${selectedPost.title} image ${index + 1}`}
-                        borderRadius="md"
-                        objectFit="cover"
-                        maxH="300px"
-                        w="full"
-                      />
-                    ))}
-                  </SimpleGrid>
+                  <ImageGallery images={selectedPost.image_urls} title={selectedPost.title} />
                 )}
 
                 {/* Content */}
@@ -695,5 +687,4 @@ const ProfilePage = () => {
     </Navigation>
   );
 };
-
 export default ProfilePage; 
