@@ -2,7 +2,7 @@
 
 ## Giới thiệu
 
-**UIT-W2F** là hệ thống quản lý và tìm kiếm đồ thất lạc dành cho sinh viên tại Trường Đại học Công nghệ Thông tin (ĐHQG-HCM). Hệ thống giải quyết các hạn chế của phương pháp quản lý truyền thống (qua phòng CTSV, Lost & Found, mạng xã hội rời rạc) bằng cách cung cấp nền tảng tập trung, hiện đại, hỗ trợ tìm kiếm, trao đổi và xác thực thông tin đồ thất lạc một cách nhanh chóng, minh bạch và bảo mật.
+**UIT-W2F** là hệ thống quản lý và tìm kiếm đồ thất lạc dành cho sinh viên tại Trường Đại học Công nghệ Thông tin (ĐHQG-HCM). Hệ thống giải quyết các hạn chế của phương pháp quản lý truyền thống (qua phòng CTSV, Lost & Found, mxh) bằng cách cung cấp nền tảng tập trung, hiện đại, hỗ trợ tìm kiếm, trao đổi và xác thực thông tin đồ thất lạc một cách nhanh chóng, minh bạch và bảo mật.
 
 ---
 
@@ -138,7 +138,6 @@ backend/
 ├── services/
 │   ├── post_service.py     # Business logic cho posts
 │   └── message_service.py  # Business logic cho messages
-├── uploads/                # File storage directory
 ```
 
 ### Frontend Structure
